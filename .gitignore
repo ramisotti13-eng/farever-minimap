@@ -1,0 +1,62 @@
+# Large files we don't want to commit
+research/hlboot.dump.txt
+research/hlboot.strings.txt
+research/*.bin
+research/*.tsv
+research/extracted/
+research/classes.json
+research/hero_candidates.json
+research/live_position.json
+research/live_position.json.tmp
+research/fow_state.json
+research/maps/*.png
+research/maps/*.json
+minimap.log
+
+# Tools we download into the project / non-source artifacts in tools/
+tools/hashlink/
+tools/haxe/
+tools/classes.json
+tools/*.zip
+tools/*.exe
+tools/diff_*.txt
+tools/snapshot_*.npz
+tools/verify_stable.txt
+
+# Local-session noise from Claude Code hooks
+.remember/
+
+# Build output
+build/
+src/**/build/
+src/**/x64/
+src/**/Debug/
+src/**/Release/
+*.dll
+*.exp
+*.lib
+*.pdb
+*.obj
+*.o
+*.so
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.sln.docstates
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
