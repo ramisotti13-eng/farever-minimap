@@ -1,4 +1,4 @@
-# Farever Companion
+# Farever Minimap & DPS
 
 ![Farever Minimap](minimap.gif)
 
