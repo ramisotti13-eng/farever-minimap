@@ -90,10 +90,23 @@ std::atomic<bool> g_in_render{false};
 
 LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui::GetCurrentContext() != nullptr) {
-        if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) {
-            // ImGui consumed the message (e.g., text input in a focused box).
-            // Still chain so the game gets a chance — keep the overlay
-            // strictly non-interfering with gameplay input.
+        ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
+        ImGuiIO& io = ImGui::GetIO();
+        // Swallow mouse events the cursor is using on an ImGui widget so
+        // the game doesn't also receive them (otherwise scrolling our
+        // zoom slider would also scroll the game's camera). Anything not
+        // hovered over our UI is forwarded normally — gameplay input
+        // stays intact.
+        if (io.WantCaptureMouse) {
+            switch (msg) {
+                case WM_MOUSEMOVE:
+                case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+                case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+                case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+                case WM_XBUTTONDOWN: case WM_XBUTTONUP: case WM_XBUTTONDBLCLK:
+                case WM_MOUSEWHEEL:  case WM_MOUSEHWHEEL:
+                    return 0;
+            }
         }
     }
     return CallWindowProcW(g_overlay.orig_wndproc, hwnd, msg, wp, lp);
@@ -247,13 +260,13 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
         return false;
     }
 
-    // We deliberately do NOT use the ImGui Win32 backend yet — no input
-    // capture, the overlay is read-only. WndProc subclass would also
-    // need stacking with Steam Overlay, which has shipping risks. v0.1
-    // is display-only.
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
+    // Avoid mucking with the game's cursor — the user keeps the OS
+    // cursor at all times, ImGui just reads its position. Game keeps
+    // full keyboard control; we only ever react to mouse wheel today.
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     // Pick up the real swap chain size for the display so ImGui's
     // clipping & coordinate math matches.
     io.DisplaySize = ImVec2(
@@ -286,6 +299,22 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
         logf("overlay: ImGui_ImplDX12_Init failed");
         return false;
     }
+
+    // Win32 backend so ImGui sees mouse position + wheel. We chain our
+    // overlay_wndproc on top of whatever subclass exists (Steam Overlay
+    // installs its own; we never block events from reaching the game).
+    if (!ImGui_ImplWin32_Init(g_overlay.hwnd)) {
+        logf("overlay: ImGui_ImplWin32_Init failed");
+        return false;
+    }
+    g_overlay.orig_wndproc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+        g_overlay.hwnd, GWLP_WNDPROC,
+        reinterpret_cast<LONG_PTR>(overlay_wndproc)));
+    if (!g_overlay.orig_wndproc) {
+        logf("overlay: SetWindowLongPtrW(GWLP_WNDPROC) failed");
+        return false;
+    }
+    logf("overlay: WndProc subclass installed");
 
     // Load the world mosaic into SRV slot 1 (slot 0 is ImGui's font in
     // legacy InitLegacySingleDescriptorMode). The 4096² preview PNG is
@@ -399,10 +428,14 @@ void calib_maybe_reload() {
          static_cast<int>(c.flip_y), c.zoom);
 }
 
-// Image we render is 512x512, mosaic full is 11264x11264 (preview is
-// pre-downsampled to 4096x4096 inside the PNG file).
-constexpr float kImageSizePx = 512.0f;
+// Mosaic full is 11264x11264 (preview is pre-downsampled to 4096x4096
+// inside the PNG file). The on-screen compass diameter cycles through
+// a few fixed steps via the size button on the bezel.
 constexpr float kFullMosaicPx = 11264.0f;
+constexpr float kCompassSizes[3] = { 256.0f, 384.0f, 512.0f };
+int g_compass_size_idx = 2;   // start at largest
+
+float compass_size_px() { return kCompassSizes[g_compass_size_idx]; }
 
 ImVec2 world_to_full(double world_x, double world_y) {
     float full_x = static_cast<float>(world_x) * g_calib.world_to_full_x_scale
@@ -439,74 +472,204 @@ ViewUV compute_view_uv(double world_x, double world_y, bool have_player) {
     };
 }
 
-// Player position on the rendered 512x512 image given the view crop.
-ImVec2 player_to_screen(double world_x, double world_y, const ViewUV& view) {
+// Player position on the rendered compass image (size px square) given
+// the view crop.
+ImVec2 player_to_screen(double world_x, double world_y, const ViewUV& view,
+                        float size_px) {
     ImVec2 full = world_to_full(world_x, world_y);
     float u = full.x / kFullMosaicPx;
     float v = full.y / kFullMosaicPx;
-    float sx = (u - view.uv0.x) / (view.uv1.x - view.uv0.x) * kImageSizePx;
-    float sy = (v - view.uv0.y) / (view.uv1.y - view.uv0.y) * kImageSizePx;
+    float sx = (u - view.uv0.x) / (view.uv1.x - view.uv0.x) * size_px;
+    float sy = (v - view.uv0.y) / (view.uv1.y - view.uv0.y) * size_px;
     return ImVec2(sx, sy);
+}
+
+constexpr float kZoomMin = 10.0f;
+constexpr float kZoomMax = 20.0f;
+constexpr float kZoomStep = 1.0f;
+
+// WoW-style palette: deep brass/stone with a gold bezel.
+constexpr ImU32 kColBezel       = IM_COL32(212, 175,  55, 240);  // #d4af37
+constexpr ImU32 kColBezelShadow = IM_COL32(  0,   0,   0, 160);
+constexpr ImU32 kColBtnFill     = IM_COL32( 32,  24,  12, 235);
+constexpr ImU32 kColBtnHover    = IM_COL32( 70,  52,  24, 245);
+constexpr ImU32 kColBtnActive   = IM_COL32( 18,  12,   6, 255);
+constexpr ImU32 kColIcon        = IM_COL32(255, 220, 130, 255);
+constexpr ImU32 kColNorth       = IM_COL32(255,  80,  80, 230);
+constexpr ImU32 kColPlayer      = IM_COL32(255, 200,  50, 255);
+
+struct BezelButton {
+    ImVec2 center;
+    float  radius;
+    bool   clicked;
+    bool   hovered;
+    bool   active;
+};
+
+// Hit-test only. Visual drawing is split out so we can declare all
+// hit areas in priority order (smaller first) and then draw the
+// compass background BENEATH and the button visuals ON TOP.
+BezelButton bezel_hit(const char* id, ImVec2 center, float bezel_r,
+                      float angle_rad, float btn_r) {
+    BezelButton b{};
+    b.center = ImVec2(center.x + cosf(angle_rad) * bezel_r,
+                      center.y + sinf(angle_rad) * bezel_r);
+    b.radius = btn_r;
+    ImGui::SetCursorScreenPos(ImVec2(b.center.x - btn_r, b.center.y - btn_r));
+    ImGui::SetNextItemAllowOverlap();
+    b.clicked = ImGui::InvisibleButton(id, ImVec2(btn_r * 2, btn_r * 2));
+    b.hovered = ImGui::IsItemHovered();
+    b.active  = ImGui::IsItemActive();
+    return b;
+}
+
+void bezel_draw_circle_base(ImDrawList* dl, const BezelButton& b) {
+    ImU32 fill = b.active ? kColBtnActive
+               : b.hovered ? kColBtnHover : kColBtnFill;
+    dl->AddCircleFilled(b.center, b.radius, fill, 32);
+    dl->AddCircle(b.center, b.radius, kColBezel, 32, 2.0f);
+    dl->AddCircle(b.center, b.radius - 1.5f, kColBezelShadow, 32, 1.0f);
+}
+
+void bezel_draw_plus(ImDrawList* dl, const BezelButton& b) {
+    bezel_draw_circle_base(dl, b);
+    const float arm = b.radius * 0.45f;
+    dl->AddLine(ImVec2(b.center.x - arm, b.center.y),
+                ImVec2(b.center.x + arm, b.center.y), kColIcon, 2.5f);
+    dl->AddLine(ImVec2(b.center.x, b.center.y - arm),
+                ImVec2(b.center.x, b.center.y + arm), kColIcon, 2.5f);
+}
+
+void bezel_draw_minus(ImDrawList* dl, const BezelButton& b) {
+    bezel_draw_circle_base(dl, b);
+    const float arm = b.radius * 0.45f;
+    dl->AddLine(ImVec2(b.center.x - arm, b.center.y),
+                ImVec2(b.center.x + arm, b.center.y), kColIcon, 2.5f);
+}
+
+// Pushpin glyph: round head + sloped needle, body and needle in gold.
+void bezel_draw_pin(ImDrawList* dl, const BezelButton& b) {
+    bezel_draw_circle_base(dl, b);
+    ImVec2 head(b.center.x - 1.5f, b.center.y - 3.5f);
+    ImVec2 tip (b.center.x + 4.5f, b.center.y + 5.5f);
+    dl->AddLine(head, tip, kColIcon, 2.0f);
+    dl->AddCircleFilled(head, 3.0f, kColIcon, 12);
+    dl->AddCircle(head, 3.0f, kColBezelShadow, 12, 1.0f);
+}
+
+// Resize glyph: a small square that grows in size by tier.
+void bezel_draw_size(ImDrawList* dl, const BezelButton& b, int size_idx) {
+    bezel_draw_circle_base(dl, b);
+    const float steps[3] = { 4.0f, 6.0f, 8.0f };
+    float h = steps[size_idx] * 0.5f;
+    dl->AddRect(ImVec2(b.center.x - h, b.center.y - h),
+                ImVec2(b.center.x + h, b.center.y + h),
+                kColIcon, 1.0f, 0, 1.8f);
+}
+
+void render_compass(const LivePosition& lp) {
+    constexpr float kPi = 3.14159265358979323846f;
+    const float size = compass_size_px();
+    const float r    = size * 0.5f;
+    const float btn_r = (size <= 256.0f) ? 11.0f
+                       : (size <= 384.0f) ? 13.0f : 14.0f;
+
+    ImVec2 p_min = ImGui::GetCursorScreenPos();
+    ImVec2 p_max(p_min.x + size, p_min.y + size);
+    ImVec2 center(p_min.x + r, p_min.y + r);
+
+    // === HIT-TEST: ImGui's rule is "last overlapping item wins". So we
+    // declare the big body first (marked as AllowOverlap so later items
+    // can take hover from it), then the four small bezel buttons last.
+    ImGui::SetCursorScreenPos(p_min);
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::InvisibleButton("##compass_body", ImVec2(size, size));
+
+    BezelButton pin   = bezel_hit("##pin",        center, r, -kPi * 0.32f, btn_r);
+    BezelButton sizeb = bezel_hit("##size_cycle", center, r, -kPi * 0.20f, btn_r);
+    BezelButton plus  = bezel_hit("##zoom_plus",  center, r,  kPi * 0.20f, btn_r);
+    BezelButton minus = bezel_hit("##zoom_minus", center, r,  kPi * 0.32f, btn_r);
+
+    // === DRAWING (DrawList is z-ordered by call sequence) ===
+    auto* dl = ImGui::GetWindowDrawList();
+    ViewUV view = compute_view_uv(lp.x, lp.y, lp.valid);
+
+    if (g_overlay.mosaic.resource) {
+        dl->AddImageRounded(
+            static_cast<ImTextureID>(g_overlay.mosaic.srv_gpu.ptr),
+            p_min, p_max, view.uv0, view.uv1, IM_COL32_WHITE, r);
+    } else {
+        dl->AddCircleFilled(center, r, IM_COL32(20, 22, 30, 255), 64);
+    }
+    dl->AddCircle(center, r,        kColBezel,       96, 3.0f);
+    dl->AddCircle(center, r - 2.0f, kColBezelShadow, 96, 1.0f);
+
+    // North tick on the bezel.
+    dl->AddLine(ImVec2(center.x, p_min.y),
+                ImVec2(center.x, p_min.y + 10.0f),
+                kColNorth, 2.5f);
+
+    if (lp.valid) {
+        ImVec2 dot_local = player_to_screen(lp.x, lp.y, view, size);
+        ImVec2 dot(p_min.x + dot_local.x, p_min.y + dot_local.y);
+        float dr = 5.0f;
+        float c = cosf(static_cast<float>(lp.rot_z));
+        float s = sinf(static_cast<float>(lp.rot_z));
+        dl->AddLine(dot, ImVec2(dot.x + c * 14.0f, dot.y + s * 14.0f),
+                    kColPlayer, 2.0f);
+        dl->AddCircleFilled(dot, dr,           kColPlayer, 16);
+        dl->AddCircle(dot, dr + 1.0f, kColBezelShadow, 16, 1.5f);
+    }
+
+    // Buttons on top.
+    bezel_draw_pin(dl,   pin);
+    bezel_draw_size(dl,  sizeb, g_compass_size_idx);
+    bezel_draw_plus(dl,  plus);
+    bezel_draw_minus(dl, minus);
+
+    // === ACTIONS ===
+    if (plus.clicked)  {
+        g_calib.zoom += kZoomStep;
+        if (g_calib.zoom > kZoomMax) g_calib.zoom = kZoomMax;
+    }
+    if (minus.clicked) {
+        g_calib.zoom -= kZoomStep;
+        if (g_calib.zoom < kZoomMin) g_calib.zoom = kZoomMin;
+    }
+    if (sizeb.clicked) {
+        g_compass_size_idx = (g_compass_size_idx + 1) % 3;
+    }
+    // Drag: while the pin button is held, move the window with mouse.
+    if (pin.active) {
+        ImVec2 delta = ImGui::GetIO().MouseDelta;
+        if (delta.x != 0.0f || delta.y != 0.0f) {
+            ImVec2 wp = ImGui::GetWindowPos();
+            ImGui::SetWindowPos(ImVec2(wp.x + delta.x, wp.y + delta.y));
+        }
+    }
 }
 
 void render_imgui_window() {
     calib_maybe_reload();
 
-    ImGui::SetNextWindowSize(ImVec2(560, 700), ImGuiCond_FirstUseEver);
-    ImGui::Begin("minimap v0.1");
+    ImGuiWindowFlags wflags =
+        ImGuiWindowFlags_NoTitleBar    |
+        ImGuiWindowFlags_NoResize      |
+        ImGuiWindowFlags_NoMove        |  // only the pin button moves us
+        ImGuiWindowFlags_NoScrollbar   |
+        ImGuiWindowFlags_NoBackground  |
+        ImGuiWindowFlags_NoCollapse    |
+        ImGuiWindowFlags_AlwaysAutoResize;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2, 2));
+    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+    ImGui::Begin("minimap", nullptr, wflags);
 
     LivePosition lp = live_position_get();
-    if (lp.valid) {
-        ImGui::Text("world: %.1f, %.1f, %.1f", lp.x, lp.y, lp.z);
-        ImGui::Text("yaw:   %.3f rad", lp.rot_z);
-    } else {
-        ImGui::TextDisabled("no live position yet — run find_hero.py loop");
-    }
-    ImGui::Separator();
+    render_compass(lp);
 
-    if (g_overlay.mosaic.resource) {
-        ImVec2 image_size(kImageSizePx, kImageSizePx);
-        ViewUV view = compute_view_uv(lp.x, lp.y, lp.valid);
-        ImGui::Image(static_cast<ImTextureID>(g_overlay.mosaic.srv_gpu.ptr),
-                     image_size, view.uv0, view.uv1);
-        ImVec2 image_min = ImGui::GetItemRectMin();
-
-        if (lp.valid) {
-            ImVec2 dot = player_to_screen(lp.x, lp.y, view);
-            ImVec2 abs_dot(image_min.x + dot.x, image_min.y + dot.y);
-            auto* dl = ImGui::GetWindowDrawList();
-            float r = 5.0f;
-            dl->AddCircleFilled(abs_dot, r, IM_COL32(255, 200, 50, 255), 16);
-            // Yaw indicator (12px line in heading direction).
-            float c = cosf(static_cast<float>(lp.rot_z));
-            float s = sinf(static_cast<float>(lp.rot_z));
-            ImVec2 tip(abs_dot.x + c * 14.0f, abs_dot.y + s * 14.0f);
-            dl->AddLine(abs_dot, tip, IM_COL32(255, 200, 50, 255), 2.0f);
-            dl->AddCircle(abs_dot, r + 1.0f, IM_COL32(0, 0, 0, 200), 16, 1.5f);
-        }
-    } else {
-        ImGui::TextDisabled("mosaic not loaded");
-    }
-
-    if (ImGui::CollapsingHeader("calibration",
-                                 ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Text("scale_x  = %.4f", g_calib.world_to_full_x_scale);
-        ImGui::Text("scale_y  = %.4f", g_calib.world_to_full_y_scale);
-        ImGui::Text("offset_x = %.1f", g_calib.world_to_full_x_offset);
-        ImGui::Text("offset_y = %.1f", g_calib.world_to_full_y_offset);
-        ImGui::Text("flip_y   = %s", g_calib.flip_y ? "true" : "false");
-        ImGui::Text("zoom     = %.2fx", g_calib.zoom);
-        ImGui::TextDisabled("edit research/minimap_calibration.json");
-        ImGui::TextDisabled("(hot-reloads automatically)");
-        if (lp.valid && g_overlay.mosaic.resource) {
-            ImVec2 full = world_to_full(lp.x, lp.y);
-            ImGui::Text("full px  = (%.1f, %.1f) of %.0f", full.x, full.y,
-                        kFullMosaicPx);
-        }
-    }
-
-    ImGui::Text("Build: " __DATE__ " " __TIME__);
     ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
@@ -521,6 +684,7 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     wait_for_frame(frame);
 
     ImGui_ImplDX12_NewFrame();
+    ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     render_imgui_window();
     ImGui::Render();
@@ -652,6 +816,7 @@ void overlay_shutdown() {
         for (auto& f : g_overlay.frames) wait_for_frame(f);
         release_texture(&g_overlay.mosaic);
         ImGui_ImplDX12_Shutdown();
+        ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
     }
     release_all();

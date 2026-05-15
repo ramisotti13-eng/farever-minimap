@@ -72,7 +72,7 @@ zone naming scheme (`WorldW1Siagarta_*`).
 | M3.3 | ✅ World mosaic loaded as an R8G8B8A8 D3D12 texture (WIC decode, UPLOAD→DEFAULT heap, transient queue), drawn with `ImGui::Image`. SRV slot 0 = ImGui font, slot 1 = mosaic. |
 | M3.4 | ✅ Live local-player marker. `tools/find_me.py` locks onto the local Hero via `Hero.ownerPlayer.isMe` plus bidirectional `Player.hero == Hero` check — required to avoid reading remote players (Farever is an MMO; structural scan finds every nearby player). DLL polls `live_position.json` and draws a yellow dot + yaw line. |
 | M3.5 | ✅ Game ↔ mosaic affine transform fitted with `tools/calibrate.py` (click-to-set-position, least-squares fit per axis with prior fallback for axes with no movement). DLL hot-reloads `research/minimap_calibration.json` on mtime change — no rebuild per iteration. Heaps uses Y-down world convention so `flip_y=false` in the calibration JSON. |
-| M3.6 | ↻ Re-enable ImGui-Win32 backend so the overlay accepts input (toggle, drag, zoom). Was disabled while debugging the font-atlas crash. |
+| M3.6 | ✅ ImGui-Win32 backend enabled (WndProc subclass chains to original, swallows mouse events only when `io.WantCaptureMouse`). Compass-style circular minimap with 4 bezel buttons (pin-drag to move window, square to cycle 256/384/512 size, +/- to zoom 10–20×). `ImGuiConfigFlags_NoMouseCursorChange` keeps the OS cursor under game control. |
 | M3.7 | ↻ Configuration UI (toggle, opacity, zoom, north-up). |
 | M3.8 | ↻ Steam Overlay interop check (Steam also hooks D3D12). |
 | M3.9 | ↻ Distribution / installer. |
