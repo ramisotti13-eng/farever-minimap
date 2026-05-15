@@ -58,4 +58,5 @@ target_include_directories(imgui
 target_compile_features(imgui PUBLIC cxx_std_17)
 
 add_subdirectory(minimap-dll)
+add_subdirectory(dpsmeter-dll)
 add_subdirectory(injector)
