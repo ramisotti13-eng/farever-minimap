@@ -20,6 +20,10 @@
 
 #include <windows.h>
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <string>
 #include <vector>
 
 #include <d3d12.h>
@@ -300,19 +304,93 @@ bool overlay_init(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     return true;
 }
 
-// Calibration knobs — tune these live, refresh via re-inject.
-// Initial guess: 1 world unit ≈ 1 mosaic-full pixel, with the mosaic
-// rooted at world (grid_min_x * tile_px, grid_min_y * tile_px) =
-// (-4096, -6144). Heaps Y points down in world; image Y points down on
-// screen, so we keep flip_y off initially.
+// Calibration knobs — analytically derived from the mosaic geometry
+// in research/maps/W1_Siagarta.mosaic.json combined with the game's
+// world-unit-per-tile constant (256 m/tile, see fow_viewer.py):
+//   px_per_meter = TILE_PX / METERS_PER_TILE = 1024 / 256 = 4
+//   min_world_x  = grid_min_x * METERS_PER_TILE = -4 * 256 = -1024
+//   full_x       = (world_x - (-1024)) * 4 = 4 * world_x + 4096
+//   full_y_flip  = (1280 - world_y) * 4
+//                = kFullMosaicPx - (4 * world_y + 6144)   (flip_y=true)
+// Hot-reloadable from research/minimap_calibration.json so the user can
+// fine-tune without rebuilding the DLL.
 struct Calibration {
-    float world_to_full_x_scale  = 1.0f;
-    float world_to_full_y_scale  = 1.0f;
+    float world_to_full_x_scale  = 4.0f;
+    float world_to_full_y_scale  = 4.0f;
     float world_to_full_x_offset = 4096.0f;
     float world_to_full_y_offset = 6144.0f;
-    bool  flip_y                 = false;
+    bool  flip_y                 = true;
 };
 Calibration g_calib;
+
+const wchar_t* kCalibPath =
+    L"D:\\farevermod\\research\\minimap_calibration.json";
+
+bool calib_extract_double(const std::string& json, const char* key,
+                          double& out) {
+    std::string needle = "\"";
+    needle += key;
+    needle += "\":";
+    auto i = json.find(needle);
+    if (i == std::string::npos) return false;
+    i += needle.size();
+    while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) ++i;
+    char* end = nullptr;
+    double v = strtod(json.c_str() + i, &end);
+    if (end == json.c_str() + i) return false;
+    out = v;
+    return true;
+}
+
+bool calib_extract_bool(const std::string& json, const char* key, bool& out) {
+    std::string needle = "\"";
+    needle += key;
+    needle += "\":";
+    auto i = json.find(needle);
+    if (i == std::string::npos) return false;
+    i += needle.size();
+    while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) ++i;
+    if (json.compare(i, 4, "true") == 0)  { out = true;  return true; }
+    if (json.compare(i, 5, "false") == 0) { out = false; return true; }
+    return false;
+}
+
+// Hot-reload poll. Cheap: only re-reads when file mtime changes. Called
+// once per frame.
+void calib_maybe_reload() {
+    static FILETIME last_write{};
+    static bool     first_check = true;
+    WIN32_FILE_ATTRIBUTE_DATA attr;
+    if (!GetFileAttributesExW(kCalibPath, GetFileExInfoStandard, &attr)) {
+        return;  // file missing — keep current (defaults)
+    }
+    if (!first_check &&
+        attr.ftLastWriteTime.dwLowDateTime  == last_write.dwLowDateTime &&
+        attr.ftLastWriteTime.dwHighDateTime == last_write.dwHighDateTime) {
+        return;  // unchanged
+    }
+    last_write  = attr.ftLastWriteTime;
+    first_check = false;
+
+    std::ifstream f(kCalibPath);
+    if (!f) return;
+    std::string text((std::istreambuf_iterator<char>(f)),
+                      std::istreambuf_iterator<char>());
+
+    Calibration c = g_calib;  // start from current
+    double v;
+    if (calib_extract_double(text, "scale_x",  v)) c.world_to_full_x_scale  = static_cast<float>(v);
+    if (calib_extract_double(text, "scale_y",  v)) c.world_to_full_y_scale  = static_cast<float>(v);
+    if (calib_extract_double(text, "offset_x", v)) c.world_to_full_x_offset = static_cast<float>(v);
+    if (calib_extract_double(text, "offset_y", v)) c.world_to_full_y_offset = static_cast<float>(v);
+    calib_extract_bool(text, "flip_y", c.flip_y);
+    g_calib = c;
+    logf("overlay: calibration reloaded "
+         "(scale=%.3f,%.3f offset=%.1f,%.1f flip_y=%d)",
+         c.world_to_full_x_scale,  c.world_to_full_y_scale,
+         c.world_to_full_x_offset, c.world_to_full_y_offset,
+         static_cast<int>(c.flip_y));
+}
 
 // Image we render is 512x512, mosaic full is 11264x11264 (preview is
 // pre-downsampled to 4096x4096 inside the PNG file).
@@ -331,6 +409,8 @@ ImVec2 world_to_image(double world_x, double world_y) {
 }
 
 void render_imgui_window() {
+    calib_maybe_reload();
+
     ImGui::SetNextWindowSize(ImVec2(560, 700), ImGuiCond_FirstUseEver);
     ImGui::Begin("minimap v0.1");
 
@@ -366,12 +446,20 @@ void render_imgui_window() {
         ImGui::TextDisabled("mosaic not loaded");
     }
 
-    if (ImGui::CollapsingHeader("calibration")) {
-        ImGui::DragFloat("scale_x",  &g_calib.world_to_full_x_scale,  0.001f);
-        ImGui::DragFloat("scale_y",  &g_calib.world_to_full_y_scale,  0.001f);
-        ImGui::DragFloat("offset_x", &g_calib.world_to_full_x_offset, 1.0f);
-        ImGui::DragFloat("offset_y", &g_calib.world_to_full_y_offset, 1.0f);
-        ImGui::Checkbox("flip_y",   &g_calib.flip_y);
+    if (ImGui::CollapsingHeader("calibration",
+                                 ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("scale_x  = %.4f", g_calib.world_to_full_x_scale);
+        ImGui::Text("scale_y  = %.4f", g_calib.world_to_full_y_scale);
+        ImGui::Text("offset_x = %.1f", g_calib.world_to_full_x_offset);
+        ImGui::Text("offset_y = %.1f", g_calib.world_to_full_y_offset);
+        ImGui::Text("flip_y   = %s", g_calib.flip_y ? "true" : "false");
+        ImGui::TextDisabled("edit research/minimap_calibration.json");
+        ImGui::TextDisabled("(hot-reloads automatically)");
+        if (lp.valid && g_overlay.mosaic.resource) {
+            ImVec2 dot = world_to_image(lp.x, lp.y);
+            ImGui::Text("image px = (%.1f, %.1f) of %.0f", dot.x, dot.y,
+                        kImageSizePx);
+        }
     }
 
     ImGui::Text("Build: " __DATE__ " " __TIME__);

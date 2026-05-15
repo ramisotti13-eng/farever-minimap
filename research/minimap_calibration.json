@@ -1,0 +1,8 @@
+{
+  "_comment": "Y-axis flipped (flip_y -> false), offset_y recomputed to keep last calibrated point at world (-398, 1436) mapped to full px (3397, 8697).",
+  "scale_x": 4.0,
+  "scale_y": 4.0,
+  "offset_x": 4988.910197120356,
+  "offset_y": 2952.0,
+  "flip_y": false
+}

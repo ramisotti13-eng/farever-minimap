@@ -16,7 +16,8 @@ overlay.
 | **M3.2**| ImGui-DX12 overlay window rendering in-game                                 |
 | **M3.3**| World mosaic loaded as a D3D12 texture, drawn with `ImGui::Image`           |
 | **M3.4**| Live local-player marker, with read-only-safe local-Hero pick via `isMe`    |
-| **M3.5**| ↻ calibration of the game ↔ mosaic transform (next session)                 |
+| **M3.5**| Game↔mosaic transform fitted via `tools/calibrate.py`; DLL hot-reloads `research/minimap_calibration.json` so iterations don't need rebuild |
+| **M3.6**| ↻ Re-enable Win32 input subclass so the overlay accepts toggles / drag      |
 
 End-to-end on the current build:
 
@@ -34,9 +35,11 @@ D:\farevermod\build\injector\RelWithDebInfo\inject.exe `
 
 The "minimap v0.1" ImGui window appears in-game showing the world
 mosaic, current world coordinates, and a yellow player marker that
-moves with the local character. Marker position on the mosaic is
-still using placeholder calibration constants — fitting those to
-real landmarks is M3.5.
+moves with the local character. The marker placement uses the affine
+transform in `research/minimap_calibration.json`; refit with
+`python tools/calibrate.py` (left-click your real spot on the map,
+press the green "Fit & Save" button) — the DLL picks it up on the
+next frame.
 
 ## Repository layout
 
