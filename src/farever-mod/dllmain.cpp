@@ -19,13 +19,36 @@
 #include "hl_hook.h"
 
 #include <windows.h>
+#include <atomic>
+#include <thread>
+#include <chrono>
 
 namespace fv = farever;
 
 namespace {
 
-HMODULE  g_self  = nullptr;
+HMODULE   g_self = nullptr;
 fv::LibHL g_libhl{};
+
+// Smoke-test watcher: counts allocations of ent.Hero. Real consumer
+// modules (Hero state for the minimap, DamageDisplay for DPS) land in
+// follow-up commits. For now this just proves the hook + dispatcher
+// chain reaches real Haxe classes.
+std::atomic<std::uint64_t> g_hero_alloc_count{0};
+std::atomic<std::uintptr_t> g_first_hero{0};
+
+void on_hero_alloc(std::uintptr_t obj) {
+    std::uint64_t n = ++g_hero_alloc_count;
+    if (n == 1) {
+        g_first_hero.store(obj);
+        fv::logf("watcher[ent.Hero]: first alloc at 0x%llx",
+                 static_cast<unsigned long long>(obj));
+    } else if (n == 10 || n == 100 || n == 1000 || (n % 5000) == 0) {
+        fv::logf("watcher[ent.Hero]: %llu allocs so far, latest 0x%llx",
+                 static_cast<unsigned long long>(n),
+                 static_cast<unsigned long long>(obj));
+    }
+}
 
 DWORD WINAPI worker_thread(LPVOID) {
     fv::logf("worker: started");
@@ -33,11 +56,14 @@ DWORD WINAPI worker_thread(LPVOID) {
         fv::logf("worker: libhl resolution failed — aborting mod startup");
         return 1;
     }
+    // Register watchers BEFORE installing the hook so we don't miss
+    // the very first allocations on the way out of probe_init.
+    fv::hl_hook_register(L"ent.Hero", on_hero_alloc);
     if (!fv::hl_hook_install(g_libhl)) {
         fv::logf("worker: hl_hook_install failed");
         return 2;
     }
-    fv::logf("worker: scaffold up — phase 2 will hook hl_alloc_obj here");
+    fv::logf("worker: live — hl_alloc_obj hooked, watching ent.Hero");
     return 0;
 }
 
