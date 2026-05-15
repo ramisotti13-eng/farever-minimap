@@ -29,6 +29,12 @@ reconnects on its own once you are back in the overworld. The scan
 takes a bit because the game's heap is large, but the minimap stays
 on screen the whole time.
 
+If the minimap ever stops drawing or the game starts stuttering
+because of it, press **F8** to toggle the overlay off; press F8 again
+to bring it back. The mod also auto-disables itself if it sees the
+GPU stalling for too long in a row, so you should not need a game
+restart to recover from a bad transition.
+
 ## What it does and does not touch
 
 Farever is an online game, so the mod is read only on purpose.

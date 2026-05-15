@@ -89,6 +89,20 @@ struct Overlay {
 Overlay g_overlay;
 std::atomic<bool> g_in_render{false};
 
+// Panic switch. Toggled by F8 in `overlay_wndproc`, or auto-set when the
+// render path detects repeated GPU stalls. When false, `overlay_on_present`
+// skips its render entirely and the game's Present runs unmodified —
+// recovery without a relaunch if our overlay ever wedges on a transition
+// (e.g., HomeStone). Re-enable with F8.
+std::atomic<bool> g_overlay_enabled{true};
+
+// Count consecutive fence-wait timeouts in the render path. After
+// `kAutoDisableSlowFrames` of them we flip `g_overlay_enabled` off so a
+// wedged GPU/queue can't hold the game's render thread indefinitely.
+constexpr int kFenceTimeoutMs       = 50;
+constexpr int kAutoDisableSlowFrames = 30;
+int g_consecutive_slow_frames = 0;
+
 // Forward declarations for path helpers defined further down.
 std::wstring dll_dir();
 std::wstring data_path(const wchar_t* relative);
@@ -96,6 +110,18 @@ std::wstring data_path(const wchar_t* relative);
 // --- WndProc chain ----------------------------------------------------------
 
 LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    // Panic-toggle. F8 flips the overlay on/off without ever touching
+    // MinHook (unhooking the function we're currently inside is unsafe);
+    // we just early-out in overlay_on_present when disabled. Bit 30 of
+    // lParam is the previous key state — gate on 0 to ignore auto-repeat.
+    if (msg == WM_KEYDOWN && wp == VK_F8 && (lp & (1u << 30)) == 0) {
+        bool now_enabled = !g_overlay_enabled.load();
+        g_overlay_enabled.store(now_enabled);
+        g_consecutive_slow_frames = 0;
+        logf("overlay: F8 toggle -> %s", now_enabled ? "ENABLED" : "DISABLED");
+        return 0;  // swallow — don't let the game see F8
+    }
+
     if (ImGui::GetCurrentContext() != nullptr) {
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
         ImGuiIO& io = ImGui::GetIO();
@@ -156,12 +182,18 @@ void release_all() {
     }
 }
 
-void wait_for_frame(FrameContext& frame) {
-    if (frame.fence_value == 0) return;  // never submitted
-    if (g_overlay.fence->GetCompletedValue() >= frame.fence_value) return;
+// Wait until the GPU has finished the work referenced by `frame.fence_value`,
+// or up to `timeout_ms` milliseconds. Returns true on completion, false on
+// timeout. We never WAIT INFINITE on the render thread — a wedged GPU or
+// stuck queue would otherwise freeze the game entirely (which is exactly
+// the HomeStone-transition failure mode F8 / auto-disable recover from).
+bool wait_for_frame(FrameContext& frame, DWORD timeout_ms) {
+    if (frame.fence_value == 0) return true;  // never submitted
+    if (g_overlay.fence->GetCompletedValue() >= frame.fence_value) return true;
     g_overlay.fence->SetEventOnCompletion(frame.fence_value,
                                           g_overlay.fence_event);
-    WaitForSingleObject(g_overlay.fence_event, INFINITE);
+    DWORD wr = WaitForSingleObject(g_overlay.fence_event, timeout_ms);
+    return wr == WAIT_OBJECT_0;
 }
 
 bool create_back_buffer_targets(IDXGISwapChain3* swap_chain) {
@@ -1021,8 +1053,23 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
 
     // Critical: must finish on the GPU before we Reset() this slot's
     // allocator. With back_buffer_count=2 the GPU is typically still
-    // working on this allocator from one or two frames ago.
-    wait_for_frame(frame);
+    // working on this allocator from one or two frames ago. Bounded
+    // wait so a wedged GPU/queue can't hold the game's render thread —
+    // on timeout we skip the overlay frame entirely and let the game's
+    // Present run unmodified.
+    if (!wait_for_frame(frame, kFenceTimeoutMs)) {
+        int n = ++g_consecutive_slow_frames;
+        if (n == 1 || (n % 30) == 0) {
+            logf("overlay: fence wait timed out (%d consecutive)", n);
+        }
+        if (n >= kAutoDisableSlowFrames) {
+            g_overlay_enabled.store(false);
+            logf("overlay: %d slow frames in a row -> auto-disabled "
+                 "(press F8 to re-enable)", n);
+        }
+        return;  // skip our overlay this frame; game Present runs as usual
+    }
+    g_consecutive_slow_frames = 0;
 
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
@@ -1086,6 +1133,7 @@ void overlay_on_present(IDXGISwapChain3* swap_chain,
 
     if (g_overlay.init_failed) return;
     if (!queue) return;  // ExecuteCommandLists hasn't run yet
+    if (!g_overlay_enabled.load()) return;  // panic-toggled (F8) or auto-disabled
 
     // Re-entrancy guard: ImGui-DX12 internally may trigger calls that
     // re-enter Present (rare but seen in flip-model games).
@@ -1123,8 +1171,12 @@ void overlay_on_resize(IDXGISwapChain3* swap_chain, UINT buffer_count,
     if (swap_chain != g_overlay.owned_swap_chain) return;
     logf("overlay: resize -> %u buffers", buffer_count);
     // Drain any in-flight GPU work before yanking the back buffers.
+    // Long timeout (1 s) — resize is rare and slow anyway, but we'd
+    // rather log a timeout than deadlock if the GPU is wedged.
     for (auto& f : g_overlay.frames) {
-        wait_for_frame(f);
+        if (!wait_for_frame(f, 1000)) {
+            logf("overlay: resize drain timed out for a frame slot");
+        }
         f.fence_value = 0;
     }
     release_frame_targets();
@@ -1154,7 +1206,12 @@ void overlay_shutdown() {
     }
     if (g_overlay.initialized) {
         // Drain GPU before destroying anything it might still reference.
-        for (auto& f : g_overlay.frames) wait_for_frame(f);
+        // Bounded so a wedged GPU can't hang DllMain DETACH.
+        for (auto& f : g_overlay.frames) {
+            if (!wait_for_frame(f, 1000)) {
+                logf("overlay: shutdown drain timed out for a frame slot");
+            }
+        }
         release_texture(&g_overlay.mosaic);
         release_texture(&g_overlay.poi_atlas);
         release_texture(&g_overlay.player_arrow);
