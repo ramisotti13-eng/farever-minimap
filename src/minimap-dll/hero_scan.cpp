@@ -4,9 +4,10 @@
 // pointers), then validates via Hero.ownerPlayer.isMe and the
 // bidirectional Player.hero == Hero check.
 //
-// Once a Hero is locked, hero_scan_read() is a fast deref — no IPC,
-// no Python, no JSON. The whole find_me.py + live_position.json
-// pipeline is replaced by this module.
+// Multi-threaded variant: a coordinator thread snapshots the region
+// list, then up to 4 worker threads claim regions from a shared atomic
+// counter. First worker to validate a Hero stores it via CAS and the
+// rest bail out.
 
 #include "hero_scan.h"
 #include "log.h"
@@ -17,7 +18,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <numeric>
 #include <thread>
+#include <vector>
 
 namespace farevermod {
 namespace {
@@ -54,17 +57,11 @@ std::atomic<bool>           g_thread_running{false};
 std::atomic<bool>           g_locked{false};
 std::atomic<bool>           g_failed{false};
 std::atomic<std::uintptr_t> g_hero_addr{0};
+std::atomic<DWORD>          g_scan_end_tick{0};
 std::thread                 g_thread;
 
 // --- SEH helpers ---------------------------------------------------
 
-// Reads inside RW pages should normally succeed, but VirtualQuery
-// races with allocations, and the bidirectional pointer chain can
-// land on a stale Player whose `hero` field has been freed. Wrap
-// every dereference of an untrusted address in SEH.
-//
-// These helpers live outside any C++ object scope on purpose so MSVC
-// accepts the __try without /EHa.
 int seh_read_u64(std::uintptr_t addr, std::uint64_t* out) {
     __try {
         *out = *reinterpret_cast<const std::uint64_t*>(addr);
@@ -105,11 +102,8 @@ bool in_range(double v, double lo, double hi) {
     return v >= lo && v <= hi && !std::isnan(v) && !std::isinf(v);
 }
 
-// Cheap structural check. Filters are ordered cheapest-first so most
-// offsets reject after one read (the position floats are the most
-// selective single signal; everything random in memory fails their
-// range test). The pointer-validation reads only run on offsets that
-// already look position-like.
+// Cheap structural check. Filters ordered cheapest-first so most
+// offsets reject after one 32-byte read.
 bool looks_like_hero(std::uintptr_t hero_addr) {
     double pos4[4];
     if (!seh_read_4_doubles(hero_addr + OFF_POSX, pos4)) return false;
@@ -156,33 +150,30 @@ bool is_local_hero(std::uintptr_t hero_addr) {
     return is_me == 1;
 }
 
-// --- Scan loop ------------------------------------------------------
+// --- Scan loop (parallel) ------------------------------------------
 
-void scan_thread() {
+struct Region {
+    std::uintptr_t base;
+    std::size_t    size;
+};
+
+// One-shot region snapshot — done once on the coordinator thread so the
+// worker pool sees a stable list.
+std::vector<Region> collect_regions() {
     SYSTEM_INFO si{};
     GetSystemInfo(&si);
     auto cur = reinterpret_cast<std::uintptr_t>(si.lpMinimumApplicationAddress);
     auto end = reinterpret_cast<std::uintptr_t>(si.lpMaximumApplicationAddress);
-
-    logf("hero_scan: scanning user-mode address space [%llx, %llx)",
-         (unsigned long long)cur, (unsigned long long)end);
-
-    std::size_t regions_scanned = 0;
-    std::size_t bytes_scanned   = 0;
-    std::uintptr_t found        = 0;
-
-    DWORD t_start = GetTickCount();
-
-    while (cur < end && g_thread_running.load() && found == 0) {
+    std::vector<Region> out;
+    out.reserve(8192);
+    while (cur < end) {
         MEMORY_BASIC_INFORMATION mbi{};
         if (VirtualQuery(reinterpret_cast<void*>(cur), &mbi, sizeof(mbi)) == 0)
             break;
         auto base = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
         auto size = static_cast<std::size_t>(mbi.RegionSize);
-        // Safety: a 0-sized region would deadlock the outer loop.
         if (size == 0) { cur += 4096; continue; }
         cur = base + size;
-
         if (mbi.State != MEM_COMMIT) continue;
         if (size < (64 * 1024)) continue;
         if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) continue;
@@ -193,41 +184,83 @@ void scan_thread() {
         // most a few hundred MB; gigantic regions are usually file
         // mappings / textures and bog the scan down.
         if (size > (1ULL << 30)) continue;
-
-        regions_scanned++;
-        bytes_scanned += size;
-        if ((regions_scanned & 0x1FF) == 0) {
-            logf("hero_scan: ... %zu regions, %.0f MB, %lu s",
-                 regions_scanned, bytes_scanned / (1024.0 * 1024.0),
-                 (GetTickCount() - t_start) / 1000UL);
-        }
-
-        // 8-byte stride: HashLink heap allocations are 8-byte aligned
-        // and the Hero starts at the alloc boundary.
-        std::size_t max_off = (size > kHeroSize) ? (size - kHeroSize) : 0;
-        for (std::size_t off = 0; off <= max_off; off += 8) {
-            if (!g_thread_running.load()) break;
-            std::uintptr_t cand = base + off;
-            if (!looks_like_hero(cand)) continue;
-            if (!is_local_hero(cand))   continue;
-            found = cand;
-            break;
-        }
+        out.push_back({base, size});
     }
+    return out;
+}
 
+void scan_thread() {
+    DWORD t_start = GetTickCount();
+    auto regions = collect_regions();
+    std::size_t total_bytes = std::accumulate(
+        regions.begin(), regions.end(), std::size_t{0},
+        [](std::size_t a, const Region& r) { return a + r.size; });
+    logf("hero_scan: %zu candidate regions, %.0f MB total",
+         regions.size(), total_bytes / (1024.0 * 1024.0));
+
+    // Worker pool size: leave a core for the game / render threads.
+    // First worker to find a valid Hero wins via a CAS into found_addr;
+    // others see it and return.
+    unsigned int hw = std::thread::hardware_concurrency();
+    unsigned int n_workers =
+        (hw <= 2) ? 1u : (hw <= 4) ? 2u : (hw <= 8) ? 3u : 4u;
+
+    std::atomic<std::size_t>    next_region{0};
+    std::atomic<std::uintptr_t> found_addr{0};
+    std::atomic<std::size_t>    regions_done{0};
+
+    std::vector<std::thread> workers;
+    workers.reserve(n_workers);
+    for (unsigned int w = 0; w < n_workers; ++w) {
+        workers.emplace_back([&]() {
+            while (g_thread_running.load(std::memory_order_acquire) &&
+                   found_addr.load(std::memory_order_acquire) == 0) {
+                std::size_t idx = next_region.fetch_add(
+                    1, std::memory_order_relaxed);
+                if (idx >= regions.size()) break;
+                const Region& r = regions[idx];
+                std::size_t max_off =
+                    (r.size > kHeroSize) ? (r.size - kHeroSize) : 0;
+                for (std::size_t off = 0; off <= max_off; off += 8) {
+                    if ((off & 0xFFFF) == 0) {
+                        if (!g_thread_running.load(
+                                std::memory_order_acquire) ||
+                            found_addr.load(std::memory_order_acquire) != 0)
+                            return;
+                    }
+                    std::uintptr_t cand = r.base + off;
+                    if (!looks_like_hero(cand)) continue;
+                    if (!is_local_hero(cand))   continue;
+                    std::uintptr_t exp = 0;
+                    found_addr.compare_exchange_strong(
+                        exp, cand, std::memory_order_acq_rel);
+                    return;  // either we won, or someone else did
+                }
+                regions_done.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& t : workers) t.join();
+
+    std::uintptr_t found = found_addr.load(std::memory_order_acquire);
+    DWORD elapsed_ms = GetTickCount() - t_start;
     if (found) {
         g_hero_addr.store(found, std::memory_order_release);
         g_locked.store(true);
-        logf("hero_scan: locked Hero @ 0x%llx (regions=%zu, %.1f MB scanned)",
-             (unsigned long long)found, regions_scanned,
-             bytes_scanned / (1024.0 * 1024.0));
+        logf("hero_scan: locked Hero @ 0x%llx "
+             "(workers=%u, regions=%zu/%zu, %.0f MB, %lu ms)",
+             (unsigned long long)found, n_workers,
+             regions_done.load(std::memory_order_relaxed),
+             regions.size(),
+             total_bytes / (1024.0 * 1024.0), elapsed_ms);
     } else {
         g_failed.store(true);
         logf("hero_scan: no local Hero found "
-             "(regions=%zu, %.1f MB scanned). User probably hasn't entered "
-             "the world yet — scan will not retry automatically.",
-             regions_scanned, bytes_scanned / (1024.0 * 1024.0));
+             "(workers=%u, regions=%zu, %.0f MB, %lu ms)",
+             n_workers, regions.size(),
+             total_bytes / (1024.0 * 1024.0), elapsed_ms);
     }
+    g_scan_end_tick.store(GetTickCount(), std::memory_order_release);
     g_thread_running.store(false);
 }
 
@@ -237,9 +270,6 @@ void scan_thread() {
 
 void hero_scan_start() {
     if (g_thread_running.exchange(true)) return;
-    // Reap any prior worker that already exited so we can reassign
-    // g_thread cleanly. join() is a no-op on a finished thread but
-    // still drains its state.
     if (g_thread.joinable()) g_thread.join();
     g_locked.store(false);
     g_failed.store(false);
@@ -259,20 +289,26 @@ LivePosition hero_scan_read() {
     LivePosition lp{};
     std::uintptr_t a = g_hero_addr.load(std::memory_order_acquire);
     if (a == 0) {
-        // No lock — if the previous scan finished (success or failure)
-        // but the address is now zero we got a stale-pointer kick. Spin
-        // up a new scan transparently so a dungeon transition reconnects.
-        if (!g_thread_running.load() && (g_failed.load() || g_locked.load())) {
-            hero_scan_start();
+        // No lock. Two reasons we might want to start a fresh scan:
+        //   - The previous scan FAILED (player not in the world yet).
+        //     Retry, but only every few seconds so we don't burn CPU.
+        //   - The validation handler below kicked the lock — that path
+        //     already calls hero_scan_start() directly, so we don't
+        //     need to also restart from here.
+        if (g_failed.load() && !g_thread_running.load()) {
+            DWORD now = GetTickCount();
+            if (now - g_scan_end_tick.load(std::memory_order_acquire)
+                    > 5000UL) {
+                hero_scan_start();
+            }
         }
         return lp;
     }
-    // Validate the lock every ~60 frames (≈1 sec at 60 Hz). After a
-    // dungeon transition the game often keeps the OLD Hero memory
-    // mapped but flips its `Player.isMe` to 0 — we'd happily keep
-    // reading frozen coordinates without this check. is_local_hero
-    // re-walks the bidirectional Hero <-> Player chain; if anything no
-    // longer matches we drop the lock and kick off a fresh scan.
+
+    // Validate the lock every ~64 frames. After a dungeon transition
+    // the game often keeps the OLD Hero memory mapped but flips its
+    // `Player.isMe` to 0 — we'd happily keep reading frozen coordinates
+    // without this check.
     static std::atomic<int> validate_tick{0};
     int vt = validate_tick.fetch_add(1, std::memory_order_relaxed);
     if ((vt & 0x3F) == 0) {
@@ -288,8 +324,6 @@ LivePosition hero_scan_read() {
 
     double pos4[4];
     if (!seh_read_4_doubles(a + OFF_POSX, pos4)) {
-        // Stale address — clear, then trigger a fresh scan so dungeon
-        // enter/leave reconnects on its own.
         g_hero_addr.store(0);
         g_locked.store(false);
         logf("hero_scan_read: pointer went stale, restarting scan");
@@ -301,14 +335,6 @@ LivePosition hero_scan_read() {
     lp.z     = pos4[2];
     lp.rot_z = pos4[3];
     lp.valid = true;
-    // Diagnostic: log a sample every ~10 s so we can see whether the
-    // values are changing as the player walks.
-    static std::atomic<int> ticks{0};
-    int t = ticks.fetch_add(1, std::memory_order_relaxed);
-    if ((t % 600) == 0) {
-        logf("hero_scan_read: pos=(%.2f, %.2f, %.2f) rot=%.3f",
-             lp.x, lp.y, lp.z, lp.rot_z);
-    }
     return lp;
 }
 
