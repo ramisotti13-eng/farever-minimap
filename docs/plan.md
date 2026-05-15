@@ -73,18 +73,29 @@ zone naming scheme (`WorldW1Siagarta_*`).
 | M3.4 | ✅ Live local-player marker. `tools/find_me.py` locks onto the local Hero via `Hero.ownerPlayer.isMe` plus bidirectional `Player.hero == Hero` check — required to avoid reading remote players (Farever is an MMO; structural scan finds every nearby player). DLL polls `live_position.json` and draws a yellow dot + yaw line. |
 | M3.5 | ✅ Game ↔ mosaic affine transform fitted with `tools/calibrate.py` (click-to-set-position, least-squares fit per axis with prior fallback for axes with no movement). DLL hot-reloads `research/minimap_calibration.json` on mtime change — no rebuild per iteration. Heaps uses Y-down world convention so `flip_y=false` in the calibration JSON. |
 | M3.6 | ✅ ImGui-Win32 backend enabled (WndProc subclass chains to original, swallows mouse events only when `io.WantCaptureMouse`). Compass-style circular minimap with 4 bezel buttons (pin-drag to move window, square to cycle 256/384/512 size, +/- to zoom 10–20×). `ImGuiConfigFlags_NoMouseCursorChange` keeps the OS cursor under game control. |
-| M3.7 | ↻ Configuration UI (toggle, opacity, zoom, north-up). |
-| M3.8 | ↻ Steam Overlay interop check (Steam also hooks D3D12). |
-| M3.9 | ↻ Distribution / installer. |
 
 ### M4 — POIs
 
 | Sub  | Result                                                                      |
 | ---- | --------------------------------------------------------------------------- |
-| M4.1 | ✅ `tools/extract_pois.py` parses `Level/World/<world>.dat/gameplayData/*.prefab` (plain JSON) inside `res.map.pak` → `research/pois_<world>.json`. 149 POIs for W1_Siagarta: 10 obelisks, 24 respawns, 3 merchants, 112 activities (WorldElite/FightStone/ChestOrb/…). |
-| M4.2 | ✅ DLL loads the JSON via a tiny hand-rolled parser (`pois.h/.cpp`) and renders coloured markers on the compass — diamond/cross/triangle/square/circle keyed off kind+subkind, circle-clipped to the bezel. |
-| M4.3 | ↻ Filter UI: toggle kinds on/off (Obelisk, Respawn, Activity sub-types). |
+| M4.1 | ✅ `tools/extract_pois.py` parses `Level/World/<world>.dat/gameplayData/*.prefab` (plain JSON) inside `res.map.pak` → `research/pois_<world>.json`. 161 POIs for W1_Siagarta: 10 obelisks, 24 respawns, 12 dungeons, 3 merchants, 112 activities (WorldElite/FightStone/ChestOrb/…). |
+| M4.2 | ✅ DLL loads the JSON via a tiny hand-rolled parser (`pois.h/.cpp`) and renders icon markers on the compass. Uses the game's own UI/icons/activities.png atlas (8x2 of 128px diamond sprites) via `AddImageRounded`, plus rotated PlayerMapArrow via `AddImageQuad`. Mapping table verified against the in-game world map. |
+| M4.3 | ✅ Filter tablet (gold/stone styled, hidden by default behind a bezel funnel button) with checkboxes for the 5 top-level kinds. Auto-resizes to content width. |
 | M4.4 | ↻ Dynamic POIs from in-memory player markers / active quest. |
+
+### M5 — In-process scanning + reconnect
+
+| Sub  | Result                                                                      |
+| ---- | --------------------------------------------------------------------------- |
+| M5.1 | ✅ Hero scan ported to C++ in the DLL. Background thread walks committed RW regions in our own process; SEH-wrapped reads tolerate VirtualQuery races. Validates the lock via `is_local_hero` (ownerPlayer.isMe + bidirectional Player.hero). Replaces the `find_me.py + live_position.json` pipeline entirely — no Python required at runtime. |
+| M5.2 | ✅ Bezel collapse button shrinks the compass to a 36-px puck; clicking the puck expands it, dragging it moves the window. Auto-reconnect on dungeon transitions: every ~64 frames `hero_scan_read` re-runs `is_local_hero` on the locked address — if isMe flipped or the bidirectional pointer no longer matches, drop the lock and re-scan. |
+| M5.3 | ✅ Multi-threaded heap scan. Coordinator snapshots the region list, 3–4 workers claim regions atomically and CAS the found Hero. ~3× speedup on a 6 GB heap (3 minutes → ~1 minute for re-scan after dungeon exit). 5 s cooldown between failed scans to avoid CPU drain on the title screen. |
+
+### M6 — Release
+
+| Sub  | Result                                                                      |
+| ---- | --------------------------------------------------------------------------- |
+| M6.1 | ✅ All asset paths in the DLL resolved relative to its own location via `GetModuleFileNameW`. Release zip layout: `inject.exe`, `minimap.dll`, `data\` (POI json, calibration json, mosaic, icons). Public repo at https://github.com/ramisotti13-eng/farever-minimap holds only README + gif; the zip is attached to the GitHub release. Source stays local. |
 
 ## Risks
 
