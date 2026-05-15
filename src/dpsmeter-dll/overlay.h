@@ -5,10 +5,9 @@
 
 namespace dpsmeter {
 
-// Scaffold-stage callbacks. For now these only log frame counters so we
-// can verify the hook chain works end-to-end. The full ImGui overlay
-// (damage table, encounter timer, etc.) will come once the damage scan
-// is ported into the DLL.
+// Hook-side callbacks invoked from d3d12_hook.cpp. The overlay owns
+// its own DX12 resources (descriptor heaps, command list, fences) and
+// records into the captured queue alongside the game's submissions.
 void overlay_on_present(IDXGISwapChain3* swap_chain,
                         ID3D12CommandQueue* captured_queue);
 void overlay_on_resize(IDXGISwapChain3* swap_chain, UINT buffer_count,

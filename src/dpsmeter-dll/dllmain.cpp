@@ -8,6 +8,8 @@
 #include "log.h"
 #include "d3d12_hook.h"
 #include "overlay.h"
+#include "damage_scan.h"
+#include "hero_state.h"
 
 #include <windows.h>
 
@@ -15,6 +17,8 @@ namespace dps = dpsmeter;
 
 DWORD WINAPI hook_install_thread(LPVOID) {
     dps::d3d12_hook_install();
+    dps::damage_scan_start();
+    dps::hero_state_start();
     return 0;
 }
 
@@ -30,6 +34,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH:
+            dps::hero_state_stop();
+            dps::damage_scan_stop();
             dps::overlay_shutdown();
             dps::d3d12_hook_uninstall();
             dps::log_line("DllMain DETACH");

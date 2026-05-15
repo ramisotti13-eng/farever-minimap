@@ -3,6 +3,11 @@ add_library(dpsmeter SHARED
     log.cpp
     d3d12_hook.cpp
     overlay.cpp
+    mem_scan.cpp
+    type_anchor.cpp
+    damage_scan.cpp
+    hero_state.cpp
+    aggregator.cpp
 )
 
 target_link_libraries(dpsmeter PRIVATE
