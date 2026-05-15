@@ -7,11 +7,14 @@ add_library(farever_mod SHARED
     type_anchor.cpp
     hl_hook.cpp
     damage.cpp
+    d3d12_hook.cpp
     dinput8.def
 )
 
 target_link_libraries(farever_mod PRIVATE
     minhook
+    d3d12
+    dxgi
 )
 
 target_compile_definitions(farever_mod PRIVATE

@@ -1,9 +1,15 @@
-// Damage-event source. Hooks `st.skill.DamageResult` allocations via
-// the hl_alloc_obj dispatcher, then reads the DR's fields once the
-// Haxe constructor has populated them. The hook returns inside the
-// allocator before the caller runs the constructor, so fields are
-// still zero at hook time — we defer reads to a pump thread that
-// retries each pending entry a few times before giving up.
+// Damage-event source, render-thread variant. The hl_alloc_obj
+// watcher fires on whatever thread called the HashLink allocator
+// (most often the main game thread) and only pushes the raw DR ptr
+// into a queue — no field reads at hook time. The Present hook
+// (d3d12_hook.cpp) calls damage_tick() once per frame on the render
+// thread, which HashLink has already registered with its GC. That's
+// the safe place to read the fresh DamageResult's fields without
+// racing hxbit's deserialiser.
+//
+// History: an earlier build ran the pump on a background worker.
+// Both unregistered and hl_register_thread-registered variants
+// destabilised the engine (see feedback_hashlink_pump_thread.md).
 
 #include "damage.h"
 #include "hl_hook.h"
@@ -13,34 +19,30 @@
 #include <windows.h>
 
 #include <atomic>
-#include <chrono>
 #include <cstring>
 #include <deque>
 #include <mutex>
-#include <thread>
 #include <unordered_set>
 #include <vector>
 
 namespace farever {
 namespace {
 
-// st.skill.DamageResult layout (matches Python prototype + dpsmeter):
-constexpr std::size_t OFF_DR_BASESKILL = 8;     // *Skill
-constexpr std::size_t OFF_DR_AMOUNT    = 80;    // f64
-constexpr std::size_t OFF_DR_HITCOUNT  = 88;    // i32
-constexpr std::size_t OFF_DR_KILL      = 104;   // u8
-constexpr std::size_t OFF_DR_CRITICAL  = 105;   // u8
+// st.skill.DamageResult layout:
+constexpr std::size_t OFF_DR_BASESKILL = 8;
+constexpr std::size_t OFF_DR_AMOUNT    = 80;
+constexpr std::size_t OFF_DR_HITCOUNT  = 88;
+constexpr std::size_t OFF_DR_KILL      = 104;
+constexpr std::size_t OFF_DR_CRITICAL  = 105;
 
-// Skill (and BaseSkill): kind:String at +152
-constexpr std::size_t OFF_SKILL_KIND   = 152;
+constexpr std::size_t OFF_SKILL_KIND = 152;
+constexpr std::size_t OFF_STR_BYTES  = 8;
+constexpr std::size_t OFF_STR_LEN    = 16;
 
-// Haxe String: bytes:*u16 @ +8, length:i32 @ +16 (in chars)
-constexpr std::size_t OFF_STR_BYTES = 8;
-constexpr std::size_t OFF_STR_LEN   = 16;
-
-// How many pump iterations to retry a pending DR before dropping it.
-// 1 iteration = 50 ms; 20 retries = ~1 s window for the constructor.
-constexpr int kMaxPendingRetries = 20;
+// Pending entries are retried for ~1 second (60 frames @ 60 Hz) before
+// being dropped as "constructor never finished" — usually means the
+// object was reused or a hxbit deserialise was abandoned.
+constexpr int kMaxPendingRetries = 60;
 
 constexpr std::size_t kEventRingMax = 4096;
 
@@ -49,30 +51,19 @@ struct Pending {
     int            retries;
 };
 
-std::atomic<bool>          g_running{false};
+std::atomic<bool>          g_active{false};
 std::atomic<std::uint64_t> g_allocs_seen{0};
 std::atomic<std::uint64_t> g_events_emitted{0};
 std::atomic<std::uint64_t> g_dropped_uninit{0};
 std::atomic<std::uint64_t> g_dropped_garbage{0};
-std::thread                g_pump_thread;
+std::atomic<std::uint64_t> g_ticks{0};
 
-// HashLink GC thread-registration entry points; populated by
-// damage_start and consumed only by the pump thread.
-using PFN_hl_register_thread   = void (*)(void* /*stack_top*/);
-using PFN_hl_unregister_thread = void (*)();
-using PFN_hl_blocking          = void (*)(bool);
-PFN_hl_register_thread   g_hl_register_thread   = nullptr;
-PFN_hl_unregister_thread g_hl_unregister_thread = nullptr;
-PFN_hl_blocking          g_hl_blocking          = nullptr;
+std::mutex                          g_pending_mu;
+std::deque<Pending>                 g_pending;
 
-std::mutex                              g_pending_mu;
-std::deque<Pending>                     g_pending;          // FIFO of unread allocs
-
-std::mutex                              g_events_mu;
-std::deque<DamageEvent>                 g_events;           // drainable ring
-std::unordered_set<std::uintptr_t>      g_seen_dr;          // dedupe across pump iterations
-
-// --- skill-name decoder ---------------------------------------------
+std::mutex                          g_events_mu;
+std::deque<DamageEvent>             g_events;
+std::unordered_set<std::uintptr_t>  g_seen_dr;
 
 bool decode_skill_name(std::uintptr_t dr_ptr, char out[64]) {
     out[0] = 0;
@@ -112,24 +103,15 @@ bool decode_skill_name(std::uintptr_t dr_ptr, char out[64]) {
     return true;
 }
 
-// --- alloc-hook callback --------------------------------------------
-
-void on_dr_alloc(std::uintptr_t dr_ptr) {
-    if (!dr_ptr) return;
-    g_allocs_seen.fetch_add(1, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lk(g_pending_mu);
-    g_pending.push_back({dr_ptr, 0});
-}
-
-// --- pump -----------------------------------------------------------
-
+// True = settled (either a valid event, or filtered garbage — caller
+// drops it). False = not yet populated, retry on next tick.
 bool try_decode(std::uintptr_t dr_ptr, DamageEvent* out) {
     std::int32_t hits = 0;
     if (!mem_read_i32(dr_ptr + OFF_DR_HITCOUNT, &hits)) return false;
-    if (hits == 0) return false;                  // constructor still not done
+    if (hits == 0) return false;
     if (hits < 1 || hits > 50) {
         g_dropped_garbage.fetch_add(1, std::memory_order_relaxed);
-        return true;                              // settle but skip emit
+        return true;
     }
     double damage = 0;
     if (!mem_read_f64(dr_ptr + OFF_DR_AMOUNT, &damage)) return false;
@@ -140,7 +122,7 @@ bool try_decode(std::uintptr_t dr_ptr, DamageEvent* out) {
     std::uint8_t crit = 0;
     std::uint8_t kill = 0;
     mem_read_u8(dr_ptr + OFF_DR_CRITICAL, &crit);
-    mem_read_u8(dr_ptr + OFF_DR_KILL, &kill);
+    mem_read_u8(dr_ptr + OFF_DR_KILL,     &kill);
 
     char skill[64];
     if (!decode_skill_name(dr_ptr, skill)) {
@@ -157,37 +139,89 @@ bool try_decode(std::uintptr_t dr_ptr, DamageEvent* out) {
     return true;
 }
 
-void pump_iteration() {
-    // Snapshot pending under the lock, then process without holding it.
+void on_dr_alloc(std::uintptr_t dr_ptr) {
+    if (!dr_ptr) return;
+    g_allocs_seen.fetch_add(1, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lk(g_pending_mu);
+    g_pending.push_back({dr_ptr, 0});
+}
+
+}  // namespace
+
+void damage_start(const LibHL& /*libhl*/) {
+    if (g_active.exchange(true)) return;
+    g_allocs_seen.store(0);
+    g_events_emitted.store(0);
+    g_dropped_uninit.store(0);
+    g_dropped_garbage.store(0);
+    g_ticks.store(0);
+    {
+        std::lock_guard<std::mutex> lk(g_pending_mu);
+        g_pending.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_events_mu);
+        g_events.clear();
+        g_seen_dr.clear();
+    }
+    hl_hook_register(L"st.skill.DamageResult", on_dr_alloc);
+    logf("damage: watcher registered (render-thread tick)");
+}
+
+void damage_stop() {
+    g_active.store(false);
+}
+
+void damage_tick() {
+    if (!g_active.load(std::memory_order_acquire)) return;
+
+    std::uint64_t n = g_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n == 1) {
+        logf("damage: first tick — render thread present hook is alive");
+    }
+    // Stats heartbeat every 600 ticks (~10 s at 60 Hz). Must run
+    // OUTSIDE the work.empty() shortcut so we still observe periods of
+    // no damage activity.
+    if (n % 600 == 0) {
+        logf("damage: tick %llu — allocs=%llu, events=%llu, "
+             "pending=%zu, dropped(uninit)=%llu, dropped(garbage)=%llu",
+             static_cast<unsigned long long>(n),
+             static_cast<unsigned long long>(g_allocs_seen.load()),
+             static_cast<unsigned long long>(g_events_emitted.load()),
+             [] { std::lock_guard<std::mutex> lk(g_pending_mu);
+                  return g_pending.size(); }(),
+             static_cast<unsigned long long>(g_dropped_uninit.load()),
+             static_cast<unsigned long long>(g_dropped_garbage.load()));
+    }
+
     std::vector<Pending> work;
     {
         std::lock_guard<std::mutex> lk(g_pending_mu);
         work.assign(g_pending.begin(), g_pending.end());
         g_pending.clear();
     }
-    std::vector<Pending> retry;
-    retry.reserve(work.size());
+    if (work.empty()) return;
+
+    std::vector<Pending>     retry;
     std::vector<DamageEvent> emit;
+    retry.reserve(work.size());
     emit.reserve(work.size());
 
     for (Pending p : work) {
         DamageEvent ev{};
         if (try_decode(p.dr_ptr, &ev)) {
-            if (ev.hit_count > 0) {
-                emit.push_back(ev);
-            }
+            if (ev.hit_count > 0) emit.push_back(ev);
         } else {
-            p.retries++;
-            if (p.retries < kMaxPendingRetries) {
+            if (++p.retries < kMaxPendingRetries) {
                 retry.push_back(p);
             } else {
                 g_dropped_uninit.fetch_add(1, std::memory_order_relaxed);
             }
         }
     }
+
     if (!retry.empty()) {
         std::lock_guard<std::mutex> lk(g_pending_mu);
-        // Put unsettled items back at the front (preserve FIFO order).
         for (auto it = retry.rbegin(); it != retry.rend(); ++it) {
             g_pending.push_front(*it);
         }
@@ -201,90 +235,9 @@ void pump_iteration() {
             while (g_events.size() > kEventRingMax) g_events.pop_front();
         }
     }
-}
 
-void pump_main() {
-    logf("damage_pump: thread starting");
-
-    // Register with HashLink's GC. Without this the Boehm collector
-    // can't enumerate our stack as a set of roots and can't pause us
-    // during stop-the-world — both lead to inconsistent state with
-    // hxbit's mid-deserialise field writes.
-    int stack_marker = 0;
-    if (g_hl_register_thread) {
-        g_hl_register_thread(&stack_marker);
-        logf("damage_pump: hl_register_thread OK (stack_top=%p)",
-             static_cast<void*>(&stack_marker));
-    } else {
-        logf("damage_pump: WARNING hl_register_thread not resolved — "
-             "running unregistered, expect races");
-    }
-
-    std::uint64_t last_logged_events = 0;
-    DWORD last_log_tick = GetTickCount();
-    while (g_running.load(std::memory_order_acquire)) {
-        pump_iteration();
-
-        DWORD now = GetTickCount();
-        if (now - last_log_tick >= 5000) {
-            std::uint64_t n = g_events_emitted.load();
-            if (n != last_logged_events) {
-                logf("damage_pump: stats — allocs=%llu, events=%llu "
-                     "(+%llu since last), dropped(uninit)=%llu, "
-                     "dropped(garbage)=%llu",
-                     static_cast<unsigned long long>(g_allocs_seen.load()),
-                     static_cast<unsigned long long>(n),
-                     static_cast<unsigned long long>(n - last_logged_events),
-                     static_cast<unsigned long long>(g_dropped_uninit.load()),
-                     static_cast<unsigned long long>(g_dropped_garbage.load()));
-                last_logged_events = n;
-            }
-            last_log_tick = now;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    if (g_hl_unregister_thread) g_hl_unregister_thread();
-    logf("damage_pump: thread exiting, %llu allocs, %llu events, "
-         "%llu dropped (uninit), %llu dropped (garbage)",
-         static_cast<unsigned long long>(g_allocs_seen.load()),
-         static_cast<unsigned long long>(g_events_emitted.load()),
-         static_cast<unsigned long long>(g_dropped_uninit.load()),
-         static_cast<unsigned long long>(g_dropped_garbage.load()));
-}
-
-}  // namespace
-
-void damage_start(const LibHL& libhl) {
-    if (g_running.exchange(true)) return;
-    if (g_pump_thread.joinable()) g_pump_thread.join();
-    g_allocs_seen.store(0);
-    g_events_emitted.store(0);
-    g_dropped_uninit.store(0);
-    g_dropped_garbage.store(0);
-    {
-        std::lock_guard<std::mutex> lk(g_pending_mu); g_pending.clear();
-    }
-    {
-        std::lock_guard<std::mutex> lk(g_events_mu);
-        g_events.clear();
-        g_seen_dr.clear();
-    }
-    g_hl_register_thread   = reinterpret_cast<PFN_hl_register_thread>(
-        libhl.hl_register_thread);
-    g_hl_unregister_thread = reinterpret_cast<PFN_hl_unregister_thread>(
-        libhl.hl_unregister_thread);
-    g_hl_blocking          = reinterpret_cast<PFN_hl_blocking>(
-        libhl.hl_blocking);
-
-    hl_hook_register(L"st.skill.DamageResult", on_dr_alloc);
-    g_pump_thread = std::thread(pump_main);
-    logf("damage: watcher registered for st.skill.DamageResult, "
-         "pump thread up (GC-registered)");
-}
-
-void damage_stop() {
-    g_running.store(false);
-    if (g_pump_thread.joinable()) g_pump_thread.join();
+    // (heartbeat moved to the top of the function so it fires even on
+    // ticks where there's no pending work.)
 }
 
 std::size_t damage_drain(DamageEvent* out, std::size_t max) {
@@ -304,7 +257,7 @@ DamageStats damage_stats() {
     s.events_emitted   = g_events_emitted.load(std::memory_order_relaxed);
     s.dropped_uninit   = g_dropped_uninit.load(std::memory_order_relaxed);
     s.dropped_garbage  = g_dropped_garbage.load(std::memory_order_relaxed);
-    s.damage_result_tag = 0;   // hook learns this; not directly exposed yet
+    s.damage_result_tag = 0;
     return s;
 }
 

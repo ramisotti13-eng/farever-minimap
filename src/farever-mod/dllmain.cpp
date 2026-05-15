@@ -18,6 +18,7 @@
 #include "libhl.h"
 #include "hl_hook.h"
 #include "damage.h"
+#include "d3d12_hook.h"
 
 #include <windows.h>
 #include <atomic>
@@ -58,18 +59,17 @@ DWORD WINAPI worker_thread(LPVOID) {
     // Register watchers BEFORE installing the hook so we don't miss
     // the very first allocations on the way out of probe_init.
     fv::hl_hook_register(L"ent.Hero", on_hero_alloc);
-    // damage_start() is OFF again — hl_register_thread + pump killed
-    // the game during early startup (before the first frame). The
-    // working configuration is: watchers fine, pump thread off. Next
-    // diagnostic will keep the pump but skip reads until we've passed
-    // initial network sync.
-    // fv::damage_start(g_libhl);
+    fv::damage_start(g_libhl);   // queue only; drain happens on Present
     if (!fv::hl_hook_install(g_libhl)) {
         fv::logf("worker: hl_hook_install failed");
         return 2;
     }
-    fv::logf("worker: live — hl_alloc_obj hooked, watching ent.Hero "
-             "(damage pump disabled)");
+    if (!fv::d3d12_hook_install()) {
+        fv::logf("worker: d3d12_hook_install failed — damage events "
+                 "will queue but never drain");
+    }
+    fv::logf("worker: live — hl_alloc_obj hooked (ent.Hero + "
+             "DamageResult), D3D12 Present hook drives damage_tick");
     return 0;
 }
 
@@ -92,7 +92,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH:
-            // fv::damage_stop();   // matches the disabled damage_start
+            fv::d3d12_hook_uninstall();
+            fv::damage_stop();
             fv::hl_hook_uninstall();
             fv::dinput8_proxy_unload();
             fv::log_line("DllMain DETACH");

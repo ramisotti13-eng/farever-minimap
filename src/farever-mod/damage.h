@@ -16,22 +16,24 @@ struct DamageEvent {
     char           skill[64];     // ASCII, NUL-terminated
 };
 
-// Register the hl_alloc_obj watcher and start the pump thread. The
-// watcher pushes freshly-allocated DamageResult pointers into a
-// pending queue (their fields are still zero at hook time — the
-// Haxe constructor runs AFTER hl_alloc_obj returns); the pump
-// dequeues each entry on its next iteration, reads damage / hit /
-// crit / skill, filters garbage, and pushes a DamageEvent into the
-// drainable event ring.
+// Register the hl_alloc_obj watcher. The watcher pushes freshly-
+// allocated DamageResult pointers into a pending queue at alloc time
+// (their fields are still zero — the Haxe constructor runs AFTER
+// hl_alloc_obj returns).
 //
-// The pump thread registers itself with HashLink's GC via
-// hl_register_thread on start and hl_unregister_thread on stop. An
-// unregistered thread reading heap pointers can race with the
-// stop-the-world GC and the Boehm collector won't scan its stack as
-// roots — both of which were the most likely cause of the hxbit
-// "Could not sync object" crash seen in the first phase-3a build.
+// `damage_tick()` must then be called once per frame from a
+// HashLink-known thread (the d3d12 Present hook): it drains the
+// queue, reads damage / hit / crit / skill from each settled DR,
+// retries the ones whose constructor hasn't run yet, and emits
+// DamageEvents.
 void damage_start(const LibHL& libhl);
 void damage_stop();
+
+// Drive one pass of the pending → event pipeline. MUST be called from
+// the render thread (Present hook) — driving it from a background
+// worker thread crashed hxbit's deserialiser in earlier builds. See
+// feedback_hashlink_pump_thread.md for the post-mortem.
+void damage_tick();
 
 // Pull queued events for the aggregator (called from the render
 // thread). Returns count written.
