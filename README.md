@@ -1,5 +1,7 @@
 # Farever Minimap
 
+![Farever Minimap](minimap.gif)
+
 A compass-shaped minimap overlay for Farever (Shiro Games). Shows your
 position with a heading arrow, the world mosaic underneath, and the
 points of interest the game already tracks (obelisks, respawn points,
