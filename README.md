@@ -1,6 +1,7 @@
 # Farever Minimap & DPS
 
 ![Farever Minimap](minimap.gif)
+![Farever DPS meter](dpsmeter.gif)
 
 A drop-in overlay for Farever (Shiro Games) that bundles two tools:
 
