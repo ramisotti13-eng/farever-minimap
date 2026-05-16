@@ -115,42 +115,6 @@ right one much easier when several are stacked.
   drop progressively (Crit%, Max, Hits, Total, %). At the narrowest
   size you get just the icon and the DPS column.
 
-## Atlas (prototype)
-
-A built-in catalog of every item, unit, dungeon and skill in the
-game, pulled from the localized CDB that ships in `res.pak`. Click
-the **book button on the minimap bezel** to open it.
-
-Four tabs (English UI):
-
-* **Equipment**: 462 items, sub-filtered by All / Weapons / Armor
-  / Accessories.
-* **Units**: 357 enemies and NPCs. Every named boss is in here.
-* **Activities**: 122 activities, dungeons and world events.
-* **Skills**: 576 skills with names and flavor.
-
-A language picker at the top of the window switches the catalog
-between de, es, fr, ja, ko, pl, pt-BR, ru and zh, plus a
-synthetic en fallback (English isn't shipped as a separate
-localization in the game; the fallback shows pretty-printed CDB
-IDs instead). Default is en. Each language is a separate TSV file
-in `data\` (~150-200 KB each); delete the ones you don't want to
-trim the install.
-
-Items show their icon and stats (level, iLevel, rarity, sell
-price) once you have actually seen the item in the game once,
-in an inventory, on a vendor, in a chest drop or on the ground.
-Those captures persist to `data\item_captures.tsv` and grow
-incrementally across sessions, so the longer you play with the mod
-the more populated the atlas gets. Items you have not encountered
-yet still show name and flavor text, just no icon or numbers.
-
-**This is a prototype.** Drop sources ("which boss drops what")
-are not wired in yet; that's the next step. Expect occasional
-captures that fail to resolve an icon for the more unusual item
-types (mounts, gliders, cosmetics) - those use a different
-asset path than the equipment atlas.
-
 ## Layout
 
 Click the padlock (either on the minimap bezel or in the DPS-meter
@@ -187,6 +151,27 @@ game first, do not restart it - the log gets overwritten on launch)
 and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
+
+## What's new in 0.4.3
+
+Removed the experimental Atlas window. It was an item / boss /
+dungeon catalog with runtime item-icon captures, but the icon
+pipeline never landed cleanly and the extra alloc hooks (every
+chest, every `st.item.*` subclass, every inventory slot UI
+element) were adding more crash surface than the feature returned
+value. Stripping it out keeps the mod focused on what it does
+well: minimap + DPS meter.
+
+If you have leftover files from 0.4.1 / 0.4.2, you can safely
+delete:
+
+* `data\cdb_atlas*.tsv`
+* `data\item_captures.tsv`
+* `data\portraits\` (the whole folder; ~70 MB)
+
+Nothing else changed in this release. The 0.4.2 stability fixes
+(entity_state type-anchor + throttle, bounded GPU fence waits in
+the texture loader) are still in.
 
 ## What's new in 0.4.2
 
