@@ -152,6 +152,51 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.15
+
+v0.4.14's throttling wasn't enough. Retests on the affected hardware
+([#11 kesmese](https://github.com/ramisotti13-eng/farever-minimap/issues/11)
+12 min alt-tabbed, [#16 Blox](https://github.com/ramisotti13-eng/farever-minimap/issues/16)
+3 min in combat) both crashed again with the same `DX12Driver.present`
+AV. Critically, neither log shows a SEH trip or our auto-disable line.
+That means the AV is **not** inside our code-path (our `__try` would
+catch it), it's inside the game's own DX12 path, triggered by the
+cumulative overhead of our `hl_alloc_obj` MinHook trampoline itself.
+The throttle reduces how much work the dispatcher does on each call,
+but the trampoline cost is paid on every game allocation regardless.
+
+The only way out is to actually remove the trampoline once we don't
+strictly need it. 0.4.15 adds an opt-in mode for the affected users:
+
+**Anticrash mode**: drop an empty file at `data/anticrash.flag`. On
+launch the mod prints `worker: kill switches ... anticrash=ARMED`,
+acquires the Hero lock normally, then after 5 seconds of uninterrupted
+lock surgically removes the `hl_alloc_obj` hook entirely and stops the
+damage tracker. The game's HashLink allocator goes back to running
+with zero overhead from us. From that point on:
+
+* The minimap keeps working. `hero_state` switches to polling
+  `Player.hero` (the back-reference from the cached Player) every
+  ~70 ms (4 frames) to detect zone transitions.
+* The DPS meter stops collecting events (the alloc-hook that fed it
+  is gone). The window itself still draws but won't update past what
+  was already in flight.
+* A small amber-then-green diagnostic status box appears top-left:
+  amber "anticrash ARMED" while it waits for lock stable, then green
+  "anticrash DISARMED, alloc-hook removed" once the hook is gone.
+* Log line `hero_state: anticrash trigger at tick N` tells you the
+  exact frame the hook came off.
+
+The trade-off is real: you trade DPS tracking for stability. If you
+weren't using the DPS meter much, this is a clean win. If you need
+DPS and don't hit the AV, leave the flag off and 0.4.15 behaves
+exactly like 0.4.14.
+
+To turn it back off, delete the flag file and restart the game.
+
+For everyone else: 0.4.15 is the same as 0.4.14, just with the
+opt-in escape hatch added.
+
 ## What's new in 0.4.14
 
 The crash-bisection answer arrived.
