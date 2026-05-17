@@ -152,6 +152,33 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.9
+
+Diagnostic build. v0.4.8's post-transition pause shipped working
+heuristics for the teleport / first-spawn crashes (confirmed in
+issue #11), but a third crash class still surfaced on a long
+AFK + alt-tab session. The existing alt-tab guards may or may not
+have fired in that window -- the previous heartbeat only said
+"alive" without distinguishing submitted vs skipped frames.
+
+0.4.9 changes the overlay heartbeat to a per-guard counter so a
+post-crash log shows exactly what happened in the last ~10 s
+before the freeze:
+
+```
+overlay: alive @ tick N submitted=X skip(no_hero=A pause=B
+  iconic=C hidden=D fg=E fence=F) auto-disabled=0
+```
+
+If the next AFK + alt-tab crash log shows `fg=600` for the
+windows around the crash, the alt-tab guard was doing its job
+and the bug is somewhere outside our overlay submission. If
+it shows `submitted=600`, the guard wasn't catching the
+alt-tab and we have a concrete bug to fix.
+
+No behaviour changes other than the heartbeat format -- the
+v0.4.8 post-transition pause is still active.
+
 ## What's new in 0.4.8
 
 Targets the `DX12Driver.present` AV pattern that keeps surfacing
