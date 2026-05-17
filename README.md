@@ -152,6 +152,42 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.8
+
+Targets the `DX12Driver.present` AV pattern that keeps surfacing
+on zone transitions / fresh hero spawns (issues #11 + #12). Logs
+show the crash hits right after the game's render pipeline starts
+streaming a new chunk while our overlay is still submitting a
+command list on top.
+
+Both crash logs share the same shape:
+
+* Issue #11: cross-zone teleport (Mayda → Azuram), crash ~31 s
+  later while walking around the new zone.
+* Issue #12: first hero spawn after the title screen, crash ~5 s
+  after the LOCKED event when the minimap first starts drawing
+  the mosaic + 1082 POIs.
+
+0.4.8 adds a **post-transition overlay pause**. Two heuristics
+catch both scenarios:
+
+1. Hero pointer changes (fresh lock, zone transition, recovery
+   after a re-validation failure).
+2. Hero position jumps more than 500 game units between frames
+   (in-place teleport where the existing Hero just gets a new
+   position rather than being replaced).
+
+When either fires, overlay submission is skipped for the next
+120 frames (~2 s @ 60 fps) so the game's own DX12 streaming
+finishes before we add another command list on top. The pause
+is logged so it shows up in any future crash log.
+
+DPS-meter ticking, hero tracking and the alt-tab guard continue
+running during the pause -- only the overlay's GPU submission is
+held off. From the user's side this looks like the overlay
+disappearing for a couple of seconds right after a teleport,
+then snapping back.
+
 ## What's new in 0.4.7
 
 Round two of the user-reported issue sweep.
