@@ -152,6 +152,28 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.10
+
+Two changes informed by v0.4.9's new heartbeat counters.
+
+* **Post-transition pause extended from 2 s to 5 s** (issue #12).
+  The v0.4.9 log from the affected user showed the pause fired
+  correctly at hero lock, our overlay resumed cleanly 2 s later,
+  ran 1441 frames without any guard tripping, and the AV still
+  hit ~5 s after lock. So whatever game-side event tips over has
+  a fixed delay relative to lock, not to our submission --- the
+  fix is to stay paused through that whole window. 120 frames
+  becomes 300 frames.
+* **Pause DPS tracking hotkey** (issue #13). New default `F12`,
+  rebindable in the Hotkeys panel. When on, the DamageDisplay
+  alloc-hook callback returns immediately and damage_tick
+  short-circuits before any work, so even in dense mob farming
+  the per-event overhead drops to just the MinHook trampoline
+  itself. Toggling F10 only hides the window; F12 actually pauses
+  the backend. State is persisted to `ui_state.json`. A live
+  status line in the Hotkeys window shows whether tracking is
+  active or paused.
+
 ## What's new in 0.4.9
 
 Diagnostic build. v0.4.8's post-transition pause shipped working
