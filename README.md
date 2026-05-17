@@ -152,6 +152,61 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.14
+
+The crash-bisection answer arrived.
+
+Two independent test runs on 0.4.13 with the kill switches told
+the same story. Blox [#16 boot 1](https://github.com/ramisotti13-eng/farever-minimap/issues/16) with `no_overlay.flag` active
+(zero D3D submissions from us) crashed at the usual `DX12Driver.present`
+AV after 18 minutes of active combat. kesmese [#11](https://github.com/ramisotti13-eng/farever-minimap/issues/11) with `no_hl_tick.flag`
+active (zero HashLink-side reads from us) ran 43 minutes cleanly
+before the game's own session timeout took him to character
+select. Symmetric. Not the render pipeline, the always-on
+HashLink read path is the trigger.
+
+0.4.14 hardens that path in six concrete ways.
+
+* **`hero_state_tick` drain capped at 8 entries per frame** (was
+  unbounded). City scenes with many remote players entering range
+  used to fire `is_local_hero` checks on dozens of fresh allocs in
+  the same frame.
+* **`on_hero_alloc` queue capped at 8 entries when already locked**
+  (was 256). The pending queue exists to catch zone-transition
+  re-locks, not to buffer every remote-player allocation.
+* **`hero_state_tick` `publish()` throttled to every 4th frame**
+  (15 Hz position update). Still completely smooth on the compass,
+  but the per-frame read cost drops about 75 %.
+* **`damage_tick` only drains on even frames**. Halves the
+  per-frame pressure from the damage pipeline; the DamageDisplay
+  retry buffer absorbs the one-frame staggered delay invisibly.
+* **Type-tag check on the locked Hero before reads**. The type
+  pointer at offset +0 gets compared against the learned `hl_type`
+  for `ent.Hero`, and the lock is dropped on mismatch. Cheap guard
+  against Boehm GC reusing a dead Hero's memory slot for a
+  different class.
+* **`__try` / `__except` wrap on both ticks with auto-disable
+  after 5 consecutive failures**. Mirrors the overlay's
+  auto-disable safety net: if our reads keep tripping access
+  violations the module shuts itself down so the game stays alive.
+  Log line `auto-disabling module to keep the game alive` tells
+  you what happened.
+
+Also: a small **diagnostic status box** (top-left, amber border)
+appears whenever a kill switch is engaged so you can visually
+confirm the mod is alive. Issue #16's boot 2 retest was abandoned
+because the user saw an empty screen and thought the mod had
+failed to load. That won't happen any more.
+
+If your build was stable on 0.4.13, install 0.4.14 and use the
+mod normally. **No flag files**, **no env vars** — those were
+diagnostic only. If you were hitting the recurring
+`DX12Driver.present` AV, please remove any `no_overlay.flag` /
+`no_hl_tick.flag` from `data/` and retest with the throttling
+active. If it still hits, attach the new log; the
+`auto-disabling module` line (if present) tells me which side
+is still tripping and where to dig next.
+
 ## What's new in 0.4.13
 
 Two unrelated things.
