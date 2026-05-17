@@ -201,6 +201,31 @@ the crash and is the fastest way to narrow the cause.
   builds (pre-1809) may reject all of them. Updating the GPU
   driver usually fixes it.
 
+## What's new in 0.5.2.2
+
+Two small things on top of 0.5.2.1:
+
+* **Right-click on the minimap registers again**
+  ([#23](https://github.com/ramisotti13-eng/farever-minimap/issues/23)).
+  In 0.5.2 / 0.5.2.1 right-clicking a chest or red-orb marker on
+  the minimap to mark it collected silently did nothing. The
+  recently added RMB auto-clickthrough (which makes camera-rotate
+  ignore the overlay) was eating the right-click before the
+  collectible toggle saw it. Now the auto-clickthrough only kicks
+  in when RMB starts outside the minimap window, so toggling
+  collectibles and the bezel reposition drag both work normally
+  again.
+
+* **Standalone Loot tracker window**. The chest and red orb counts
+  used to live only inside the filter tablet, where they were easy
+  to miss. New small draggable window labelled "Loot" with a row
+  per kind (gold square for chests, red circle for orbs), the
+  done / total numbers, and a thin progress bar under each row.
+  Turns green when a category hits 100%. Default visible, toggle
+  via the funnel button on the minimap bezel and the "Show loot
+  counter" checkbox in the filter tablet. Snaps back to its default
+  position with the Home reset-positions hotkey.
+
 ## What's new in 0.5.2.1
 
 Small patch release on top of 0.5.2, two user-visible fixes plus a
