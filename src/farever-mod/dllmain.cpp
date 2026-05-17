@@ -215,9 +215,16 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             // freed state if the teardown takes longer than expected.
             fv::hero_state_stop();
             fv::damage_stop();
-            // Intentionally NOT calling overlay_shutdown,
-            // d3d12_hook_uninstall, hl_hook_uninstall,
-            // dinput8_proxy_unload -- they were the unsafe steps.
+            // v0.5.1 (issue #18 audio choppy on quit): cleanly stop
+            // the overlay-window render thread + free its D3D12 +
+            // DCOMP resources before the process dies. Pre-v0.5.1 we
+            // let the thread get force-killed at process exit, which
+            // released the GPU resources hard and stuttered the
+            // system audio driver for 5-10 s.
+            fv::overlay_window_stop();
+            // Intentionally NOT calling d3d12_hook_uninstall,
+            // hl_hook_uninstall, dinput8_proxy_unload — those were
+            // the unsafe steps from issue #8.
             fv::log_line("DllMain DETACH (lean shutdown)");
             fv::log_close();
             break;

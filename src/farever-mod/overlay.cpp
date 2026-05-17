@@ -1418,15 +1418,21 @@ void render_keys_window() {
             ImGui::PushID((int)slot);
             ImGui::TextUnformatted(label);
             ImGui::SameLine(140);
-            const char* btn = listen ? "press a key..."
-                                     : key_to_name(vk).c_str();
+            // v0.5.1: bind the string to a named local so its
+            // lifetime extends through the Button call. Pre-v0.5.1
+            // the rhs of the ternary was key_to_name(vk).c_str(),
+            // which returns a pointer into a std::string temporary
+            // that dies at the end of the full expression — Button
+            // then read garbage (often empty for issue #17).
+            std::string btn_text = listen ? std::string("press a key...")
+                                          : key_to_name(vk);
             if (listen) {
                 ImGui::PushStyleColor(ImGuiCol_Button,
                                       IM_COL32(96, 64, 24, 245));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                                       IM_COL32(120, 84, 32, 245));
             }
-            if (ImGui::Button(btn, ImVec2(120, 0))) {
+            if (ImGui::Button(btn_text.c_str(), ImVec2(120, 0))) {
                 g_rebind_listening.store(listen ? 0 : (int)slot);
             }
             if (listen) ImGui::PopStyleColor(2);
@@ -1468,6 +1474,10 @@ void render_keys_window() {
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(8);
 }
+
+// Defined further down; forward declared here so the wndproc smart-
+// hover logic (issue #7) can read it.
+extern std::atomic<bool> g_overlay_wants_real_input;
 
 LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto is_press = [lp]() { return (lp & (1u << 30)) == 0; };
@@ -1598,8 +1608,17 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
         if (!ct) {
-            ImGuiIO& io = ImGui::GetIO();
-            if (io.WantCaptureMouse) {
+            // v0.5.1 smart hover (issue #7): only consume the click
+            // when the cursor is over an ACTUAL interactive widget
+            // (button, selectable, title bar drag) — not just over
+            // an ImGui window's decorative pixels (the compass
+            // bezel + mosaic image, empty DPS table area, etc).
+            // io.WantCaptureMouse was the old check but it's too
+            // coarse: it returned true for any cursor pos over any
+            // ImGui window, eating clicks meant for the game world
+            // behind the overlay. g_overlay_wants_real_input is set
+            // each frame from IsAnyItemHovered + IsAnyItemActive.
+            if (g_overlay_wants_real_input.load(std::memory_order_acquire)) {
                 switch (msg) {
                     case WM_MOUSEMOVE:
                     case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
@@ -1673,6 +1692,14 @@ std::atomic<bool> g_overlay_standalone_window{false};
 // v0.4.17 Option B: HWND override for composition swap chains where
 // swap_chain->GetDesc().OutputWindow is NULL. Set by overlay_window.
 std::atomic<HWND> g_overlay_hwnd_override{nullptr};
+
+// v0.5.1 smart hover (issue #7): true iff the cursor is over an
+// actually interactive ImGui widget (button, drag handle, etc).
+// Set per-frame from IsAnyItemHovered + IsAnyItemActive at the end
+// of overlay_render; read by the wndproc click-eating logic so
+// clicks on decorative overlay pixels (compass mosaic, table padding)
+// pass through to the game instead of being eaten.
+std::atomic<bool> g_overlay_wants_real_input{false};
 
 bool overlay_init(IDXGISwapChain3* swap_chain,
                   ID3D12CommandQueue* caller_queue) {
@@ -2441,6 +2468,18 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0
     render_minimap_window();
     render_keys_window();
     render_fight_detail_window();
+
+    // v0.5.1 smart hover (issue #7): cache whether the cursor is over
+    // an actually interactive widget (button, selectable, title bar
+    // drag, etc) versus just over a decorative window area (the
+    // compass mosaic image, an empty DPS table cell, padding). The
+    // wndproc then uses this in place of io.WantCaptureMouse so
+    // clicks on decorative pixels pass through to the game. Read
+    // BEFORE Render() while item state is still valid for the frame.
+    g_overlay_wants_real_input.store(
+        ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive(),
+        std::memory_order_release);
+
     ImGui::Render();
 
     frame.allocator->Reset();

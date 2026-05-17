@@ -26,6 +26,7 @@
 
 #include "overlay_window.h"
 #include "overlay.h"
+#include "hero_state.h"
 #include "log.h"
 
 #include <windows.h>
@@ -237,6 +238,25 @@ void release_d3d12() {
 
 void render_thread_main() {
     if (!wait_for_game_window()) return;
+
+    // v0.5.1 (issue #18 part 1): wait for the first hero lock before
+    // bringing up the DCOMP visual. Pre-v0.5.1 the visual was
+    // created immediately at game-boot, which conflicted with
+    // Steam's notification toasts during character select (Steam
+    // friend-online / game-started popups got stuck or visually
+    // glitched). By the time the local Hero is locked the user is
+    // through character select and into the world, and Steam's
+    // notification animations have already finished their lifecycle.
+    int waited_100ms = 0;
+    while (!g_win.stop.load(std::memory_order_acquire) &&
+           hero_state_locked_ptr() == 0) {
+        Sleep(100);
+        ++waited_100ms;
+    }
+    if (g_win.stop.load()) return;
+    logf("overlay_window: hero locked after %d × 100ms, starting DCOMP",
+         waited_100ms);
+
     if (!create_d3d12())          return;
 
     // ImGui-Win32 backend uses the hwnd to compute IO.DisplaySize via
@@ -250,7 +270,10 @@ void render_thread_main() {
 
     auto next_frame = std::chrono::steady_clock::now();
     constexpr auto kFrameDur = std::chrono::microseconds(16'667);  // ~60 Hz
-    bool last_f11 = false;
+    // v0.5.1: show/hide on F7 (was F11 in v0.5 but F11 is also the
+    // default toggle_clickthru keybind handled by the wndproc — same
+    // keypress was hitting both paths, which is confusing UX).
+    bool last_f7 = false;
 
     // v0.4.17.11: track game window client size so we can resize the
     // swap chain when the game grows from its tiny loading window to
@@ -268,14 +291,14 @@ void render_thread_main() {
     }
 
     while (!g_win.stop.load(std::memory_order_acquire)) {
-        bool f11 = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
-        if (f11 && !last_f11) {
+        bool f7 = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
+        if (f7 && !last_f7) {
             bool v = !g_win.visible.load();
             g_win.visible.store(v);
-            logf("overlay_window: F11 -> %s",
+            logf("overlay_window: F7 -> %s",
                  v ? "rendering" : "blanked");
         }
-        last_f11 = f11;
+        last_f7 = f7;
 
         // Detect game window resize and resize our swap chain to match.
         RECT rc;
