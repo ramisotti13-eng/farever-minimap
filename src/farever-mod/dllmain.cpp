@@ -22,6 +22,7 @@
 #include "overlay.h"
 
 #include <windows.h>
+#include <cstdio>
 
 namespace fv = farever;
 
@@ -33,23 +34,33 @@ fv::LibHL g_libhl{};
 // v0.4.13 kill switches for bisecting the persistent
 // DX12Driver.present line 3306 AV reported in issues #12 / #16.
 // The v0.4.12 log showed the crash hitting while we had submitted=0
-// frames -- the overlay was paused -- which rules out our render
+// frames (the overlay was paused), which rules out our render
 // pipeline. The remaining always-on work is hl_alloc_obj watching
 // plus damage_tick + hero_state_tick on the render thread. These
-// envs let an affected user disable each path independently so we
-// can tell which side is the trigger.
+// switches let an affected user disable each path independently so
+// we can tell which side is the trigger.
 //
-//   FAREVER_NO_OVERLAY=1   -> overlay_on_present returns immediately,
-//                             ImGui-DX12 never initialised, no command
-//                             list submitted to the game queue. HL
-//                             reads (damage + hero_state) still run.
+//   no_overlay  -> overlay_on_present returns immediately, ImGui-DX12
+//                  never initialised, no command list submitted to the
+//                  game queue. HL reads (damage + hero_state) still run.
 //
-//   FAREVER_NO_HL_TICK=1   -> damage + hero_state watchers never
-//                             register, damage_tick and
-//                             hero_state_tick are skipped in the
-//                             Present hook. hl_alloc_obj is still
-//                             trampolined but the dispatcher has no
-//                             callbacks to fire. Overlay still runs.
+//   no_hl_tick  -> damage + hero_state watchers never register,
+//                  damage_tick and hero_state_tick are skipped in the
+//                  Present hook. hl_alloc_obj is still trampolined but
+//                  the dispatcher has no callbacks to fire. Overlay
+//                  still runs.
+//
+// Two ways to engage each switch. v0.4.13.1 added the file-flag form
+// because Steam launches the game with its own pre-existing
+// environment block, so an env var set in a .bat before
+// `start steam://run/<appid>` never reaches Farever.exe (Steam was
+// already running when the .bat ran).
+//
+//   ENV var   FAREVER_NO_OVERLAY=1 / FAREVER_NO_HL_TICK=1
+//   FILE flag data/no_overlay.flag  / data/no_hl_tick.flag
+//             (contents irrelevant; presence is the signal. Path is
+//              relative to the directory dinput8.dll lives in, i.e.
+//              the Farever folder.)
 bool env_flag(const char* name) {
     char buf[8] = {};
     DWORD n = GetEnvironmentVariableA(name, buf, sizeof(buf));
@@ -57,11 +68,44 @@ bool env_flag(const char* name) {
     return buf[0] == '1';
 }
 
+// Path of "<dll-dir>\data\<name>". Returns true iff the file exists
+// (zero-byte is fine — we don't read the contents). Wraps GetModuleFileName
+// for our own HMODULE so we look relative to dinput8.dll, not the EXE
+// CWD or the user profile.
+bool file_flag(const char* name) {
+    char dll_path[MAX_PATH] = {};
+    if (g_self == nullptr) return false;
+    DWORD n = GetModuleFileNameA(g_self, dll_path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return false;
+    // Strip the dinput8.dll filename to get the directory.
+    for (DWORD i = n; i > 0; --i) {
+        if (dll_path[i - 1] == '\\' || dll_path[i - 1] == '/') {
+            dll_path[i] = 0;
+            break;
+        }
+    }
+    char full[MAX_PATH];
+    int w = std::snprintf(full, MAX_PATH, "%sdata\\%s", dll_path, name);
+    if (w <= 0 || w >= MAX_PATH) return false;
+    DWORD attr = GetFileAttributesA(full);
+    return attr != INVALID_FILE_ATTRIBUTES &&
+           !(attr & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+// Combined: switch engaged if EITHER an env var is set or the
+// matching flag file exists. File form is needed for Steam launch
+// because Steam doesn't pick up envs set after it started.
+bool kill_switch(const char* env_name, const char* file_name) {
+    return env_flag(env_name) || file_flag(file_name);
+}
+
 DWORD WINAPI worker_thread(LPVOID) {
     fv::logf("worker: started");
 
-    const bool kill_overlay = env_flag("FAREVER_NO_OVERLAY");
-    const bool kill_hl_tick = env_flag("FAREVER_NO_HL_TICK");
+    const bool kill_overlay = kill_switch("FAREVER_NO_OVERLAY",
+                                          "no_overlay.flag");
+    const bool kill_hl_tick = kill_switch("FAREVER_NO_HL_TICK",
+                                          "no_hl_tick.flag");
     if (kill_overlay) fv::overlay_kill();
     fv::logf("worker: kill switches overlay=%s hl_tick=%s",
              kill_overlay ? "OFF" : "ON",
