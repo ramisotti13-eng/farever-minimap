@@ -107,6 +107,7 @@ DWORD WINAPI worker_thread(LPVOID) {
     const bool kill_hl_tick = kill_switch("FAREVER_NO_HL_TICK",
                                           "no_hl_tick.flag");
     if (kill_overlay) fv::overlay_kill();
+    fv::overlay_set_kill_switch_state(kill_overlay, kill_hl_tick);
     fv::logf("worker: kill switches overlay=%s hl_tick=%s",
              kill_overlay ? "OFF" : "ON",
              kill_hl_tick ? "OFF" : "ON");

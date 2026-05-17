@@ -2167,6 +2167,13 @@ void render_imgui_window() {
     ImGui::PopStyleColor(10);
 }
 
+// v0.4.14: forward-declared because the definitions live near the
+// kill-switch globals further down. Called from overlay_render before
+// any hero-lock-gated window.
+void render_diagnostic_box();
+extern std::atomic<bool> g_diag_no_overlay;
+extern std::atomic<bool> g_diag_no_hl_tick;
+
 void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     keybinds_maybe_reload();
 
@@ -2210,7 +2217,13 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     // on dungeon entry). Skip the entire overlay path until we're
     // back on a known-good Hero.
     HeroSnapshot h = hero_state_read();
-    if (!h.locked) {
+    // v0.4.14: when a kill switch is engaged we still want to render
+    // the diagnostic status box even without a Hero lock, so the user
+    // can visually confirm the mod is alive. Skip the no_hero early-
+    // exit in that case and fall through; the actual minimap + DPS
+    // windows still gate on h.locked internally so they stay hidden.
+    const bool diag_force = g_diag_no_hl_tick.load() || g_diag_no_overlay.load();
+    if (!h.locked && !diag_force) {
         ++s_skip_no_hero;
         return;
     }
@@ -2349,6 +2362,7 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+    render_diagnostic_box();
     render_imgui_window();
     render_minimap_window();
     render_keys_window();
@@ -2394,10 +2408,59 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* queue) {
 // in d3d12_hook's Present detour.
 std::atomic<bool> g_overlay_killed{false};
 
+// v0.4.14: cached state of both kill switches so the diagnostic
+// status box can show which mode the user is in. Set once by
+// dllmain via overlay_set_kill_switch_state().
+std::atomic<bool> g_diag_no_overlay{false};
+std::atomic<bool> g_diag_no_hl_tick{false};
+
+// Diagnostic-mode status box. Bypasses the hero-lock gate so it
+// appears even when no_hl_tick.flag is set (hero never locks ->
+// minimap + DPS both early-exit -> overlay would otherwise look
+// dead). Tiny window pinned top-left. Only rendered when at least
+// one kill switch is active.
+void render_diagnostic_box() {
+    if (!g_diag_no_hl_tick.load() && !g_diag_no_overlay.load()) return;
+    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.78f);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoResize |
+                             ImGuiWindowFlags_NoCollapse |
+                             ImGuiWindowFlags_NoTitleBar |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(20, 16, 8, 220));
+    ImGui::PushStyleColor(ImGuiCol_Border,   IM_COL32(180, 140, 60, 240));
+    ImGui::PushStyleVar  (ImGuiStyleVar_WindowBorderSize, 1.5f);
+    if (ImGui::Begin("##farever_diag", nullptr, flags)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.40f, 1.0f),
+                           "farever-mod v0.4.14");
+        ImGui::Separator();
+        if (g_diag_no_overlay.load()) {
+            ImGui::Text("no_overlay.flag  ACTIVE");
+        }
+        if (g_diag_no_hl_tick.load()) {
+            ImGui::Text("no_hl_tick.flag  ACTIVE");
+            ImGui::TextDisabled("minimap + DPS suppressed by design");
+        }
+        ImGui::TextDisabled("diagnostic mode -- delete the flag");
+        ImGui::TextDisabled("from data/ + restart for normal use");
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
+}
+
 }  // namespace
 
 void overlay_kill()    { g_overlay_killed.store(true); }
 bool overlay_killed()  { return g_overlay_killed.load(); }
+void overlay_set_kill_switch_state(bool no_overlay, bool no_hl_tick) {
+    g_diag_no_overlay.store(no_overlay);
+    g_diag_no_hl_tick.store(no_hl_tick);
+}
 
 void overlay_on_present(IDXGISwapChain3* swap_chain,
                         ID3D12CommandQueue* queue) {

@@ -245,32 +245,11 @@ void damage_stop() {
     g_active.store(false);
 }
 
-void damage_tick() {
-    if (!g_active.load(std::memory_order_acquire)) return;
-    // Issue #13: if the user paused DPS tracking, short-circuit before
-    // the heartbeat / pending-walk so the render thread doesn't do any
-    // hl_dyn_getp work at all. Resumes cleanly when unpaused.
-    if (overlay_is_dps_tracking_paused()) return;
+// v0.4.14 (F): SEH auto-disable mirror of hero_state's.
+constexpr int               kMaxConsecutiveFailures = 5;
+static std::atomic<int>     g_consecutive_failures{0};
 
-    std::uint64_t n = g_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n == 1) {
-        logf("damage: first tick — render thread present hook is alive");
-    }
-    // Stats heartbeat every 600 ticks (~10 s at 60 Hz). Must run
-    // OUTSIDE the work.empty() shortcut so we still observe periods of
-    // no damage activity.
-    if (n % 600 == 0) {
-        logf("damage: tick %llu — allocs=%llu, events=%llu, "
-             "pending=%zu, dropped(uninit)=%llu, dropped(garbage)=%llu",
-             static_cast<unsigned long long>(n),
-             static_cast<unsigned long long>(g_allocs_seen.load()),
-             static_cast<unsigned long long>(g_events_emitted.load()),
-             [] { std::lock_guard<std::mutex> lk(g_pending_mu);
-                  return g_pending.size(); }(),
-             static_cast<unsigned long long>(g_dropped_uninit.load()),
-             static_cast<unsigned long long>(g_dropped_garbage.load()));
-    }
-
+static void damage_tick_body(std::uint64_t n) {
     // Throttle: process at most kMaxPerTick events per frame. A heavy
     // combat burst (observed ~65 DamageDisplay allocs in a single
     // game-loop scheduler slot during a Mage_Conduit_Projectile
@@ -328,6 +307,58 @@ void damage_tick() {
 
     // (heartbeat moved to the top of the function so it fires even on
     // ticks where there's no pending work.)
+}
+
+void damage_tick() {
+    if (!g_active.load(std::memory_order_acquire)) return;
+    // Issue #13: if the user paused DPS tracking, short-circuit before
+    // the heartbeat / pending-walk so the render thread doesn't do any
+    // hl_dyn_getp work at all. Resumes cleanly when unpaused.
+    if (overlay_is_dps_tracking_paused()) return;
+
+    std::uint64_t n = g_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n == 1) {
+        logf("damage: first tick — render thread present hook is alive");
+    }
+
+    // Stats heartbeat every 600 ticks (~10 s at 60 Hz). Fires regardless
+    // of throttling below so log timing stays consistent.
+    if (n % 600 == 0) {
+        logf("damage: tick %llu — allocs=%llu, events=%llu, "
+             "pending=%zu, dropped(uninit)=%llu, dropped(garbage)=%llu",
+             static_cast<unsigned long long>(n),
+             static_cast<unsigned long long>(g_allocs_seen.load()),
+             static_cast<unsigned long long>(g_events_emitted.load()),
+             [] { std::lock_guard<std::mutex> lk(g_pending_mu);
+                  return g_pending.size(); }(),
+             static_cast<unsigned long long>(g_dropped_uninit.load()),
+             static_cast<unsigned long long>(g_dropped_garbage.load()));
+    }
+
+    // v0.4.14 (C): only drain pending on even ticks. Halves the
+    // per-frame hl_dyn_getp pressure from this module. DamageDisplay's
+    // retry buffer makes the one-frame staggered delay invisible.
+    if (n & 1) return;
+
+    // v0.4.14 (F): SEH-wrap the drain. mem_reads into freshly-allocated
+    // DamageResults that haven't finished construction can trip an AV
+    // despite the userland-pointer guards; auto-disable kicks in if it
+    // happens repeatedly so the game stays alive.
+    __try {
+        damage_tick_body(n);
+        g_consecutive_failures.store(0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        int fails = g_consecutive_failures.fetch_add(1) + 1;
+        logf("damage: SEH trip #%d in tick %llu (code 0x%08lx)",
+             fails, (unsigned long long)n,
+             GetExceptionCode());
+        if (fails >= kMaxConsecutiveFailures) {
+            g_active.store(false);
+            logf("damage: %d consecutive SEH trips — auto-disabling "
+                 "module to keep the game alive. Restart to re-enable.",
+                 fails);
+        }
+    }
 }
 
 std::size_t damage_drain(DamageEvent* out, std::size_t max) {

@@ -27,4 +27,11 @@ bool overlay_is_dps_tracking_paused();
 void overlay_kill();
 bool overlay_killed();
 
+// v0.4.14 diagnostic-box state. Called once from dllmain after
+// reading the kill switches. When no_hl_tick is set, the overlay
+// draws a tiny status box that bypasses the hero-lock gate so the
+// user can visually confirm the mod is alive (issue #16 boot2 was
+// abandoned because the user thought the mod failed to load).
+void overlay_set_kill_switch_state(bool no_overlay, bool no_hl_tick);
+
 }  // namespace farever

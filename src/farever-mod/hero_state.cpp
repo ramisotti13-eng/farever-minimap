@@ -158,12 +158,16 @@ void debug_dump_hero(const char* tag, std::uintptr_t hero_ptr) {
 
 void on_hero_alloc(std::uintptr_t obj) {
     if (!obj) return;
-    constexpr std::size_t kMaxPending = 256;
+    // v0.4.14: when already locked, the pending queue exists only to
+    // catch zone-transition re-locks. City scenes with 30+ remote
+    // players were piling up hundreds of entries per second, each
+    // costing a full is_local_hero check per tick. Tight cap when
+    // locked keeps zone-transitions detectable without the churn.
+    const bool locked = g_locked_hero.load(std::memory_order_acquire) != 0;
+    const std::size_t kMaxPending = locked ? 8 : 256;
     {
         std::lock_guard<std::mutex> lk(g_pending_mu);
         g_pending.push_back({obj, 0});
-        // Drop oldest entries if the list overflows. Capped so a long
-        // session with many players entering range can't blow memory.
         if (g_pending.size() > kMaxPending) {
             g_pending.erase(
                 g_pending.begin(),
@@ -206,6 +210,30 @@ void publish() {
     if (a == 0) {
         g_snapshot = s;
         return;
+    }
+    // v0.4.14 (E): type-tag check before dereferencing. Boehm GC reuses
+    // dead object slots without unmapping pages, so an invalidated Hero
+    // can still memcpy cleanly but reads garbage. Comparing the type
+    // pointer at +0 against our learned hl_type for ent.Hero is the
+    // cheapest possible guard and matches what hl_hook itself learns
+    // when caching the watcher. Mismatch -> drop the lock.
+    static std::uintptr_t s_hero_type = 0;
+    if (s_hero_type == 0) s_hero_type = hl_hook_get_type(L"ent.Hero");
+    if (s_hero_type) {
+        std::uint64_t got_type = 0;
+        if (!mem_read_u64(a, &got_type) ||
+            static_cast<std::uintptr_t>(got_type) != s_hero_type) {
+            logf("hero_state: type-tag mismatch on locked Hero @ 0x%llx "
+                 "(got 0x%llx, want 0x%llx) — dropping lock",
+                 (unsigned long long)a,
+                 (unsigned long long)got_type,
+                 (unsigned long long)s_hero_type);
+            g_locked_hero.store(0);
+            g_locked_player.store(0);
+            g_unlocked_alloc_log_left.store(16);
+            g_snapshot = s;
+            return;
+        }
     }
     double pos[4]{0,0,0,0};
     if (!mem_read_bytes(a + OFF_HERO_POSX, pos, sizeof(pos))) {
@@ -268,23 +296,29 @@ void hero_state_stop() {
     g_active.store(false);
 }
 
-void hero_state_tick() {
-    if (!g_active.load(std::memory_order_acquire)) return;
-    std::uint64_t n = g_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
+// v0.4.14 (F): consecutive SEH trips before we auto-disable this whole
+// module. Mirrors the auto-disable on the overlay side. Self-healing
+// safety net for users whose game state happens to corrupt one of
+// our pointer chases despite the type-tag check.
+constexpr int               kMaxConsecutiveFailures = 5;
+static std::atomic<int>     g_consecutive_failures{0};
 
-    std::uintptr_t locked = g_locked_hero.load(std::memory_order_acquire);
-
-    // Always drain pending each tick. If any pending Hero passes the
-    // local-Hero predicate AND is a different pointer than what we're
-    // locked to, it's a fresher one (Farever allocates a new Hero on
-    // every zone transition) and we hop onto it. This lets us follow
-    // the player across dungeon entries / exits without waiting for
-    // the old Hero memory to be GC'd or for the user to notice that
-    // the minimap arrow has frozen.
+static void hero_state_tick_body(std::uint64_t n, std::uintptr_t locked) {
+    // v0.4.14 (D): cap drain per tick so a burst of allocs (city scene
+    // with many players entering range, dungeon-exit burst of ~16
+    // template Heroes) can't run dozens of is_local_hero checks in
+    // a single frame.
+    constexpr std::size_t kMaxDrainPerTick = 8;
     std::vector<Pending> work;
+    std::vector<Pending> remainder;
     {
         std::lock_guard<std::mutex> lk(g_pending_mu);
-        work.swap(g_pending);
+        std::size_t take = std::min(kMaxDrainPerTick, g_pending.size());
+        work.assign(g_pending.begin(), g_pending.begin() + take);
+        if (take < g_pending.size()) {
+            remainder.assign(g_pending.begin() + take, g_pending.end());
+        }
+        g_pending.clear();
     }
     std::vector<Pending> retry;
     retry.reserve(work.size());
@@ -318,6 +352,12 @@ void hero_state_tick() {
         std::lock_guard<std::mutex> lk(g_pending_mu);
         g_pending.insert(g_pending.end(), retry.begin(), retry.end());
     }
+    // v0.4.14 (D): push back whatever we left untouched this tick.
+    if (!remainder.empty()) {
+        std::lock_guard<std::mutex> lk(g_pending_mu);
+        g_pending.insert(g_pending.begin(),
+                         remainder.begin(), remainder.end());
+    }
 
     // Re-validate the current lock every 4 ticks (~70 ms) and drop if
     // dead. Dropping is the safety net — the preempting switch above
@@ -345,7 +385,15 @@ void hero_state_tick() {
         }
     }
 
-    publish();
+    // v0.4.14 (B): throttle the locked-Hero reads. When locked we ran
+    // publish() every frame (60 Hz) — 8 mem_reads per tick for pos +
+    // rot + inCombat. Cap to every 4th frame (15 Hz position update)
+    // which is still completely smooth on the compass. When NOT locked
+    // we still publish every tick to clear the snapshot quickly after
+    // a lock drop.
+    if (!locked || (n & 0x3) == 0) {
+        publish();
+    }
 
     // Heartbeat: log current position every ~10 s so we can sanity-
     // check that the locked Hero is actually moving with the player.
@@ -353,6 +401,35 @@ void hero_state_tick() {
         logf("hero_state: pos=(%.1f, %.1f, %.1f) rot=%.3f (tick %llu)",
              g_snapshot.x, g_snapshot.y, g_snapshot.z, g_snapshot.rot_z,
              static_cast<unsigned long long>(n));
+    }
+}
+
+void hero_state_tick() {
+    if (!g_active.load(std::memory_order_acquire)) return;
+    std::uint64_t n = g_ticks.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::uintptr_t locked = g_locked_hero.load(std::memory_order_acquire);
+    // v0.4.14 (F): SEH-wrap the body. If any of our mem_reads or
+    // dyn-followed pointer chases trips an AV the structured exception
+    // catches it; we count consecutive failures and auto-disable the
+    // whole module after a threshold so the game stays alive even if
+    // our reads keep tripping. The body cannot itself contain C++
+    // objects with destructors directly, hence the separate function.
+    __try {
+        hero_state_tick_body(n, locked);
+        g_consecutive_failures.store(0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        int fails = g_consecutive_failures.fetch_add(1) + 1;
+        logf("hero_state: SEH trip #%d in tick %llu (code 0x%08lx)",
+             fails, (unsigned long long)n,
+             GetExceptionCode());
+        if (fails >= kMaxConsecutiveFailures) {
+            g_active.store(false);
+            g_locked_hero.store(0);
+            g_locked_player.store(0);
+            logf("hero_state: %d consecutive SEH trips — auto-disabling "
+                 "module to keep the game alive. Restart to re-enable.",
+                 fails);
+        }
     }
 }
 
