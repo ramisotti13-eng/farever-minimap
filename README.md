@@ -152,6 +152,28 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.5
+
+**This is the release where the recurring `DX12Driver.present line 3306` AV crash is actually fixed**, after a full day of incremental versions and bisection on the affected users' logs (see [#11](https://github.com/ramisotti13-eng/farever-minimap/issues/11) / [#12](https://github.com/ramisotti13-eng/farever-minimap/issues/12) / [#16](https://github.com/ramisotti13-eng/farever-minimap/issues/16)).
+
+### The fix
+
+The overlay no longer renders into the game's swap chain at all. Pre-0.5 we hooked three D3D12 vtable functions on the game's swap chain (`Present`, `ResizeBuffers`, `ExecuteCommandLists`) so we could submit our ImGui content on the game's command queue. The bisection chain in v0.4.13 → v0.4.17 proved those vtable patches are the AV trigger (the patches' *presence* is enough; even when we suppressed all our submissions the patch sites alone destabilised the game over minutes).
+
+0.5 keeps only **one** D3D12 hook: `Present`, used purely as a HashLink-thread tick driver (`damage_tick` + `hero_state_tick` must run on the render thread). It does no rendering, no submission, no queue capture. The overlay instead runs in its own D3D12 device + command queue + composition swap chain, and the swap chain is mounted as a DirectComposition visual onto the **game's** window. DWM composites our visual over the game's render output, so the user still sees a single layered image — but the game's swap chain is never touched for rendering.
+
+### What changed for you
+
+* **F11** toggles the overlay rendering on/off (was the click-through hotkey pre-0.5; we don't need a click-through toggle any more because the overlay doesn't have a window of its own and mouse routing goes naturally through to the game).
+* The overlay auto-resizes when the game window changes size (Farever boots in an 800x600 loading window then grows to your monitor's full size, and full-screen toggling now works too).
+* The combat-state dot in the DPS header is drawn as a circle instead of the unicode `●` glyph that the Karla font lacked (it rendered as `?` for users).
+* If your build was crashing on 0.4.x with that AV, please delete every flag file from `data/` (`no_overlay.flag` / `no_hl_tick.flag` / `anticrash.flag` / `no_d3d12.flag` — they were all opt-in diagnostic levers during the bisection), drop in the new `dinput8.dll`, and play normally. If you weren't crashing, 0.5 should still feel identical except for the auto-resize and the combat-dot fix.
+
+### Known limitations in 0.5
+
+* Exclusive-fullscreen mode disables DWM composition, so the overlay won't appear if you switch the game to true fullscreen (not borderless). Farever's default is borderless windowed.
+* The kill-switch flag files (`no_overlay.flag` etc.) still exist in the binary as diagnostic levers but should no longer be needed. They'll likely be removed in 0.6.
+
 ## What's new in 0.4.15
 
 v0.4.14's throttling wasn't enough. Retests on the affected hardware
