@@ -152,6 +152,20 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.4.11
+
+Bug fix for click-through (issue #14). The v0.4.7 implementation
+flipped the flag in `ui_state.json` correctly but ImGui still
+received and reacted to mouse buttons through our wndproc -- so
+clicks on the minimap zoom buttons, the fight history rows etc.
+still fired even with click-through ON.
+
+The wndproc now skips ImGui's mouse handler entirely for button
+and wheel messages when click-through is on, so the overlay
+genuinely does not react. Mouse moves still flow through so
+hover visuals (POI hover scaling, button highlights) continue
+working.
+
 ## What's new in 0.4.10
 
 Two changes informed by v0.4.9's new heartbeat counters.
