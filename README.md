@@ -265,6 +265,20 @@ All rebindable in the Hotkeys window.
   If you want uncapped FPS for input latency at the cost of
   the overlay, toggle the mod off with F7.
 
+* **Holding ALT plus left mouse button on an overlay window can
+  trigger auto-attack when ALT is released**
+  ([#19](https://github.com/ramisotti13-eng/farever-minimap/issues/19)).
+  Mechanism: ImGui captures the LMB-down on the overlay so the
+  game's wndproc never sees it. When you release ALT, Farever
+  switches to camera mode and polls the physical LMB state via
+  raw input, which still reports LMB as held. In camera mode that
+  reads as a continuous attack. This is a fundamental trade-off
+  between ImGui capturing mouse events for UI interaction and
+  the game polling the physical mouse state in parallel. Clean
+  workarounds: release LMB before pressing ALT, or hide the
+  overlay with F7 while playing actively and toggle it back on
+  when you want to read the minimap or DPS numbers.
+
 ## What's new in 0.5.1
 
 Five small follow-ups to the 0.5 architectural rewrite, all
