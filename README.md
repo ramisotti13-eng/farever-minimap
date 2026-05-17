@@ -152,6 +152,119 @@ and open an issue with the file attached. The log records what the
 mod was doing at the moment of the crash and is the fastest way to
 narrow the cause.
 
+## What's new in 0.5.2
+
+Polish pass on top of the 0.5.1 stability win. Same DCOMP
+architecture, no new hooks, the AFK-AV-crash fix from 0.5 is
+unchanged. This release is the UX cleanup round after a day of
+people actually playing on a stable build.
+
+* **F7 actually hides the overlay now**. In 0.5.1 F7 stopped the
+  render loop but left the DCOMP visual mounted, so the last
+  rendered frame stayed pinned on screen as a frozen ghost
+  overlay. 0.5.2 detaches the DCOMP visual on hide
+  (`SetContent(nullptr)`) and re-attaches on show, so F7 actually
+  hides for real. Caught by kesmese during the v0.5.1 AFK test.
+
+* **Reset window positions hotkey** (default Home, rebindable).
+  If a window ends up somewhere you cannot grab it (different
+  monitor, behind chat, off the edge after a resolution change),
+  press Home and all four windows (minimap, DPS meter, hotkeys,
+  fight detail) snap back to their default positions. Works on
+  the stored ImGui state via SetWindowPos by name, so it resets
+  windows that are currently closed too. Driven by a user who
+  dragged the minimap off-screen and had to reinstall the mod to
+  get it back.
+
+* **RMB auto-clickthrough**. While the right mouse button is held
+  (camera mode in Farever), the overlay temporarily behaves as if
+  clickthrough were on, so camera drag never gets eaten by an
+  ImGui window the cursor happens to be over. Releases cleanly on
+  RMB up. Cuts down on the "wait my camera is stuck" moments when
+  the cursor passes over a hidden bezel button mid-rotate.
+
+* **F7 is a real rebindable keybind now**. v0.5 hard-coded F7 in
+  the render thread. 0.5.2 routes it through the normal keybind
+  table, so it shows up in the Hotkeys panel and can be rebound
+  to whatever you want, persisted to `keybinds.json`.
+
+* **Window opacity slider for the non-compass windows**. Added to
+  the bezel filter tablet next to the existing Minimap opacity,
+  this one affects the DPS Meter, Hotkeys and Fight Detail
+  backgrounds. Range 0.30 to 1.00, persisted to `ui_state.json`.
+  Compass has its own opacity already.
+
+* **Log rotation**. Boot rotates `farever-mod.log` to `.log.1`
+  (and the previous `.1` to `.2`). If you reproduce a crash and
+  restart the game before uploading, the original log is now in
+  `farever-mod.log.1` instead of being overwritten.
+
+* **Auto-hide when the hero lock drops**. Server kick, game quit,
+  disconnect: the overlay detaches automatically. Re-attaches
+  when a fresh hero lock comes back. Fixes kesmese's "stuck on
+  character select" report after the 40-minute AFK kick. Note:
+  switching characters via the main menu does not drop the lock
+  because Farever keeps the old Hero object live in memory, so
+  the overlay stays visible there for a moment until the new
+  character spawns in the world. Press F7 if you want to hide it
+  during the menu sit.
+
+* **Lock stability gate before first attach**. The DCOMP visual
+  no longer attaches on the very first hero-lock event, instead
+  waits for the lock to stay green for one full second of
+  consecutive checks. Stops the brief overlay flicker that
+  happened during zone transitions when the lock blinked off and
+  back on within a frame or two.
+
+* **Dungeon self-heal**. If the DCOMP attach state and lock state
+  get out of sync for a few seconds (visual attached but lock
+  gone, or lock present but visual missing), the render thread
+  forces a re-attach. Mostly covers the case where re-entering
+  the world after a dungeon transition would leave the overlay
+  frozen on the old frame.
+
+* **Kill-switch flag reading removed from DllMain**. The
+  `no_overlay`, `no_hl_tick`, `anticrash` and `no_d3d12` flags
+  were diagnostic levers from the v0.4.13 to v0.5 bisection saga,
+  which is done. The setter functions in `overlay.cpp` and
+  `hero_state.cpp` remain as no-op shims so a stale `data\*.flag`
+  file from an older install is just ignored instead of
+  surprising anyone.
+
+### Default hotkeys after 0.5.2
+
+| Key  | Action |
+| ---- | ------ |
+| F7   | Toggle overlay (show / hide entirely) |
+| F8   | Toggle minimap |
+| F9   | Reset current DPS pull |
+| F10  | Toggle DPS meter |
+| F11  | Toggle click-through (mouse passes to game) |
+| F12  | Pause DPS tracking |
+| Home | Reset window positions |
+
+All rebindable in the Hotkeys window.
+
+### Known compatibility notes
+
+* **Not compatible with RivaTuner Statistics Server (RTSS) on
+  the same game**, including MSI Afterburner's OSD which uses
+  RTSS underneath. Two overlay injection paths into the same
+  D3D12 device race and one of them eventually trips a GPU
+  device-removed (DXGI `0x887A0005`). Workaround: in RTSS set
+  "Application detection level" to None for `Farever.exe`, or
+  use Steam's built-in FPS counter instead, which is much more
+  compatible with composition overlays.
+
+* **FPS is capped to your monitor refresh rate while the overlay
+  is active.** Side-effect of how DirectComposition mounts on
+  the game window: it pulls the game out of independent-flip
+  presentation into DWM-composed presentation, which syncs to
+  the display refresh. For most players this matches what vsync
+  would do anyway (60 Hz = 60 FPS, 144 Hz = 144 FPS, etc).
+  If you want uncapped FPS for input latency at the cost of
+  the overlay, toggle the mod off with F7.
+
 ## What's new in 0.5.1
 
 Five small follow-ups to the 0.5 architectural rewrite, all
