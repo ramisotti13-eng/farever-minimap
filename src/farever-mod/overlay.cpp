@@ -396,6 +396,30 @@ float g_minimap_alpha = 1.0f;
 // for the text-content windows.
 float g_window_bg_alpha = 1.0f;
 
+// v0.5.3 (issue #22): global UI text scale. Applied to ImGui's
+// FontGlobalScale every frame. 0.50..2.50; 1.00 = unchanged. Persisted
+// to ui_state.json. For 4K + large display users (EpicTragedy on 48" 4K)
+// the default font renders unreadably small; scaling text 1.5x to 2.0x
+// makes the DPS table and tooltips legible. Hand-drawn bezel icons keep
+// their pixel size by design; this is text-only scaling.
+float g_ui_scale = 1.0f;
+
+// v0.5.2.2 (issue #23): per-frame "cursor is over the minimap window"
+// cache, set inside render_minimap_window after ImGui::Begin. Consumed
+// by the wndproc's RMB auto-clickthrough logic so RMB-on-minimap (POI
+// right-click toggle, bezel reposition drag) keeps reaching ImGui
+// instead of being auto-forwarded to the game as a camera click.
+// Reset to false at the top of overlay_render so a hidden minimap
+// (F8 off) does not leave the last hovered value stuck.
+std::atomic<bool> g_overlay_minimap_hovered{false};
+
+// v0.5.2.2 follow-up (issue #23): standalone "Loot tracker" window
+// that shows chests + red orbs collected counts at a glance. The
+// previous under-compass text strip got lost visually; this is its
+// own draggable, hideable widget. Default visible, persisted to
+// ui_state.json, togglable via the filter tablet checkbox.
+std::atomic<bool> g_loot_counter_visible{true};
+
 // Apply g_window_bg_alpha to the cached kColBtnFill (alpha 235/255).
 // Returns the same RGB with scaled alpha.
 inline ImU32 window_bg_color() {
@@ -660,6 +684,15 @@ void ui_lock_load() {
         if (wba > 1.00f) wba = 1.00f;
         g_window_bg_alpha = wba;
     }
+    float uis = g_ui_scale;
+    if (ui_state_extract_float(s, "ui_scale", uis)) {
+        if (uis < 0.50f) uis = 0.50f;
+        if (uis > 2.50f) uis = 2.50f;
+        g_ui_scale = uis;
+    }
+    g_loot_counter_visible.store(
+        s.find("\"loot_counter_visible\": false") == std::string::npos &&
+        s.find("\"loot_counter_visible\":false")  == std::string::npos);
 }
 
 void ui_lock_save() {
@@ -683,7 +716,10 @@ void ui_lock_save() {
       << "  \"clickthrough\": " << (g_clickthrough.load() ? "true" : "false") << ",\n"
       << "  \"dps_tracking_paused\": " << (g_dps_tracking_paused.load() ? "true" : "false") << ",\n"
       << "  \"minimap_alpha\": " << g_minimap_alpha << ",\n"
-      << "  \"window_bg_alpha\": " << g_window_bg_alpha << "\n"
+      << "  \"window_bg_alpha\": " << g_window_bg_alpha << ",\n"
+      << "  \"ui_scale\": " << g_ui_scale << ",\n"
+      << "  \"loot_counter_visible\": "
+      << (g_loot_counter_visible.load() ? "true" : "false") << "\n"
       << "}\n";
 }
 
@@ -1167,6 +1203,14 @@ void render_minimap_window() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2, 2));
     ImGui::SetNextWindowPos(ImVec2(600, 20), ImGuiCond_FirstUseEver);
     ImGui::Begin("minimap", nullptr, wflags);
+    // v0.5.2.2 (issue #23): broadcast minimap-hovered state so the
+    // wndproc can let RMB on the minimap reach ImGui (collectible
+    // toggle + bezel reposition) instead of auto-CT'ing it as a
+    // camera click. AllowWhenBlockedByActiveItem so the flag stays
+    // true while a bezel drag is in progress.
+    g_overlay_minimap_hovered.store(
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+        std::memory_order_release);
     // Off-screen rescue (issue #1): if the saved window position is
     // outside the current viewport, snap it back to a safe spot. Runs
     // every frame but only acts when the check trips.
@@ -1253,6 +1297,15 @@ void render_minimap_window() {
         ImGui::Checkbox("Plants", &g_filter.plants);
         ImGui::Checkbox("Ores",   &g_filter.ores);
 
+        // v0.5.2.2 (issue #23 follow-up): show / hide the standalone
+        // loot tracker window. Default on; users who do not care
+        // about completion progress can turn it off here.
+        bool loot_on = g_loot_counter_visible.load();
+        if (ImGui::Checkbox("Show loot counter", &loot_on)) {
+            g_loot_counter_visible.store(loot_on);
+            ui_lock_save();
+        }
+
         // Opacity slider (issue #2). Affects mosaic + bezel ring;
         // the player arrow, POI markers and bezel buttons stay full
         // alpha so they don't fade away. Persists on release.
@@ -1270,6 +1323,17 @@ void render_minimap_window() {
         ImGui::SetNextItemWidth(140);
         ImGui::SliderFloat("##window_bg_alpha", &g_window_bg_alpha,
                            0.30f, 1.00f, "%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            ui_lock_save();
+        }
+        // v0.5.3 issue #22: UI text scale. Useful on 4K + large display
+        // setups where the default font is unreadably small. Applied
+        // every frame via FontGlobalScale (see overlay_render). Bezel
+        // icons keep their pixel size; this is text-only.
+        ImGui::TextDisabled("UI scale (text)");
+        ImGui::SetNextItemWidth(140);
+        ImGui::SliderFloat("##ui_scale", &g_ui_scale,
+                           0.50f, 2.50f, "%.2fx");
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             ui_lock_save();
         }
@@ -1437,6 +1501,102 @@ void render_fight_detail_window() {
 
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(10);
+}
+
+// v0.5.2.2 (issue #23 follow-up): standalone draggable "Loot tracker"
+// window. Replaces the under-compass text strip which got lost
+// visually. Default visible, toggleable via filter-tablet checkbox,
+// snaps back via the reset-positions hotkey.
+void render_loot_counter_window() {
+    if (!g_loot_counter_visible.load()) return;
+    if (!hero_state_read().locked) return;
+
+    int c_done = 0, c_total = 0;
+    int o_done = 0, o_total = 0;
+    poi_progress_counts("chest",   &c_done, &c_total);
+    poi_progress_counts("red_orb", &o_done, &o_total);
+    if (c_total == 0 && o_total == 0) return;  // POI data not loaded yet
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,      window_bg_color());
+    ImGui::PushStyleColor(ImGuiCol_Border,        kColBezel);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg,       kColBtnFill);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, kColBtnFill);
+    ImGui::PushStyleColor(ImGuiCol_Text,          kColText);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,   6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    ImVec2(10, 8));
+
+    ImGui::SetNextWindowPos(ImVec2(40, 240), ImGuiCond_FirstUseEver);
+    ImGuiWindowFlags lf = ImGuiWindowFlags_AlwaysAutoResize |
+                          ImGuiWindowFlags_NoScrollbar |
+                          ImGuiWindowFlags_NoCollapse;
+    if (g_ui_locked.load()) lf |= ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("Loot", nullptr, lf)) {
+        // Off-screen rescue.
+        ImVec2 vp = ImGui::GetIO().DisplaySize;
+        ImVec2 wp = ImGui::GetWindowPos();
+        ImVec2 ws = ImGui::GetWindowSize();
+        if (window_is_offscreen(wp, ws, vp)) {
+            logf("overlay: loot tracker was off-screen, snapping back");
+            ImGui::SetWindowPos(ImVec2(40, 240));
+        }
+
+        ImDrawList* dl  = ImGui::GetWindowDrawList();
+        const float fh  = ImGui::GetFontSize();
+        const float gly = fh * 0.65f;  // glyph half-size
+
+        auto row = [&](ImU32 color, int shape /*1=square,0=circle*/,
+                       int done, int total, const char* label) {
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            ImVec2 c(p.x + gly, p.y + fh * 0.5f);
+            constexpr ImU32 outline = IM_COL32(0, 0, 0, 230);
+            if (shape == 1) {
+                ImVec2 a(c.x - gly,  c.y - gly);
+                ImVec2 b(c.x + gly,  c.y + gly);
+                dl->AddRectFilled(a, b, color, 1.5f);
+                dl->AddRect(a, b, outline, 1.5f, 0, 1.2f);
+            } else {
+                dl->AddCircleFilled(c, gly, color, 16);
+                dl->AddCircle(c, gly, outline, 16, 1.2f);
+            }
+            ImGui::Dummy(ImVec2(gly * 2.0f + 6.0f, fh));
+            ImGui::SameLine();
+            // Progress bar look: dimmed if not complete, brighter as
+            // ratio fills. Pure text would have been the previous
+            // under-compass version, this one is the schicker variant.
+            float ratio = total > 0 ? (float)done / (float)total : 0.0f;
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%d / %d", done, total);
+            // Right-aligned-ish numbers in a fixed-width-feeling slot:
+            ImGui::Text("%-9s", buf);
+            ImGui::SameLine();
+            ImGui::TextColored(done == total && total > 0
+                                   ? ImVec4(0.55f, 1.0f, 0.55f, 1.0f)
+                                   : ImVec4(0.85f, 0.78f, 0.55f, 1.0f),
+                               "%s", label);
+            // Thin progress sliver under the row.
+            ImVec2 bar_min = ImGui::GetItemRectMin();
+            ImVec2 bar_max = ImGui::GetItemRectMax();
+            float track_y = bar_max.y + 1.0f;
+            float track_x0 = p.x + gly * 2.0f + 6.0f;
+            float track_x1 = bar_max.x;
+            dl->AddRectFilled(ImVec2(track_x0, track_y),
+                              ImVec2(track_x1, track_y + 2.0f),
+                              IM_COL32(60, 50, 30, 220));
+            dl->AddRectFilled(ImVec2(track_x0, track_y),
+                              ImVec2(track_x0 +
+                                     (track_x1 - track_x0) * ratio,
+                                     track_y + 2.0f),
+                              color);
+            ImGui::Dummy(ImVec2(0.0f, 3.0f));
+        };
+
+        row(IM_COL32(255, 200, 60, 255), 1, c_done, c_total, "Chests");
+        row(IM_COL32(255,  60, 60, 255), 0, o_done, o_total, "Orbs");
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(5);
 }
 
 void render_keys_window() {
@@ -1662,8 +1822,21 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // UI elements instead of attacking. With auto-clickthrough,
         // any mouse activity while RMB is held passes straight to
         // the game.
+        //
+        // v0.5.2.2 (issue #23): exception, RMB started OVER the
+        // minimap window must reach ImGui so the right-click POI
+        // toggle and the bezel reposition drag keep working. Track
+        // ownership via a static set at WM_RBUTTONDOWN edge based on
+        // the per-frame g_overlay_minimap_hovered cache; cleared on
+        // WM_RBUTTONUP. While owned, RMB does NOT auto-CT.
+        static bool s_rmb_owned_by_overlay = false;
+        if (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONDBLCLK) {
+            s_rmb_owned_by_overlay =
+                g_overlay_minimap_hovered.load(std::memory_order_acquire);
+        }
         const bool rmb_held = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-        const bool ct = g_clickthrough.load() || rmb_held;
+        const bool ct = g_clickthrough.load() ||
+                        (rmb_held && !s_rmb_owned_by_overlay);
         bool is_mouse_button =
             (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ||
              msg == WM_LBUTTONDBLCLK ||
@@ -1674,6 +1847,12 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
              msg == WM_MOUSEWHEEL  || msg == WM_MOUSEHWHEEL ||
              msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP ||
              msg == WM_XBUTTONDBLCLK);
+        if (msg == WM_RBUTTONUP) {
+            // Clear after the ct check used it; UP itself is not
+            // auto-CT'd since rmb_held is already false by message
+            // arrival time.
+            s_rmb_owned_by_overlay = false;
+        }
 
         if (ct && is_mouse_button) {
             // Hide click / wheel events from ImGui entirely. Mouse
@@ -2565,8 +2744,25 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0
     }
     g_consecutive_slow_frames = 0;
 
+    // v0.5.2.2 issue #23: clear the "minimap hovered" cache; if the
+    // minimap window does not render this frame (F8 hidden, hero
+    // unlocked) the flag stays false and the wndproc keeps the v0.5.2
+    // RMB auto-clickthrough behaviour unchanged.
+    g_overlay_minimap_hovered.store(false, std::memory_order_release);
+
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
+    // v0.5.3 issue #22: apply UI scale before NewFrame so the slider's
+    // most recent value takes effect for the upcoming layout pass.
+    // FontGlobalScale stacks on top of the per-font scale ImGui already
+    // applies; clamp here so a corrupted ui_state.json can't divide-by-
+    // zero the layout.
+    {
+        float s = g_ui_scale;
+        if (s < 0.50f) s = 0.50f;
+        if (s > 2.50f) s = 2.50f;
+        ImGui::GetIO().FontGlobalScale = s;
+    }
     ImGui::NewFrame();
 
     // v0.5.2 issue #11: reset-positions hotkey. SetWindowPos by name
@@ -2581,6 +2777,7 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0
         ImGui::SetWindowPos("DPS Meter",       ImVec2( 40,  40));
         ImGui::SetWindowPos("Hotkeys",         ImVec2(620, 540));
         ImGui::SetWindowPos("###fight_detail", ImVec2(240, 240));
+        ImGui::SetWindowPos("Loot",            ImVec2( 40, 240));
     }
 
     render_diagnostic_box();
@@ -2588,6 +2785,7 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0
     render_minimap_window();
     render_keys_window();
     render_fight_detail_window();
+    render_loot_counter_window();
 
     // v0.5.1 smart hover (issue #7): cache whether the cursor is over
     // an actually interactive widget (button, selectable, title bar
