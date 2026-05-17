@@ -48,11 +48,23 @@ void overlay_set_standalone_window(bool on);
 
 // v0.4.17 Option B: override the HWND that overlay_init binds to.
 // Composition swap chains have no associated window, so
-// swap_chain->GetDesc().OutputWindow returns NULL — ImGui-Win32
-// then can't compute IO.DisplaySize and the GUI renders empty.
-// Pass our overlay-window HWND here before the first
-// overlay_on_present so ImGui sees the right window for sizing /
-// input plumbing.
+// swap_chain->GetDesc().OutputWindow returns NULL, ImGui-Win32 then
+// can't compute IO.DisplaySize and the GUI renders empty. Pass our
+// overlay-window HWND here before the first overlay_on_present so
+// ImGui sees the right window for sizing / input plumbing.
 void overlay_set_window_hwnd(void* hwnd);
+
+// v0.5.2: force the cached "cursor is over an interactive widget"
+// state. Used by overlay_window when toggling F7 to hidden so the
+// game's wndproc subclass stops eating mouse clicks immediately
+// (otherwise the last frame's stale value could keep blocking
+// until next render).
+void overlay_set_wants_real_input(bool on);
+
+// v0.5.2: virtual-key code currently bound to the overlay show/hide
+// toggle (default F7, user-rebindable in keybinds.json). Polled by
+// overlay_window's render thread via GetAsyncKeyState; reflects the
+// last keybinds_maybe_reload() result.
+unsigned overlay_get_toggle_overlay_key();
 
 }  // namespace farever

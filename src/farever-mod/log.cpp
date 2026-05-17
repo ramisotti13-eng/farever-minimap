@@ -41,10 +41,29 @@ void timestamp(char* buf, size_t n) {
 
 }  // namespace
 
+// v0.5.2: rotate older log files at boot so the previous session's
+// log isn't lost when the user reproduces an issue and uploads
+// after a restart. Keeps farever-mod.log (current) plus .1 and .2.
+void rotate_logs(const std::wstring& base) {
+    std::wstring p1 = base + L".1";
+    std::wstring p2 = base + L".2";
+    // .1 → .2 (overwrite any existing .2)
+    if (GetFileAttributesW(p1.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        DeleteFileW(p2.c_str());
+        MoveFileW(p1.c_str(), p2.c_str());
+    }
+    // current → .1
+    if (GetFileAttributesW(base.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        DeleteFileW(p1.c_str());
+        MoveFileW(base.c_str(), p1.c_str());
+    }
+}
+
 void log_open() {
     std::lock_guard<std::mutex> g(g_log_mu);
     if (g_log) return;
     std::wstring log_path = resolve_log_path();
+    rotate_logs(log_path);
     g_log = _wfsopen(log_path.c_str(), L"w", _SH_DENYWR);
     if (g_log) {
         fputs("# farever-mod (dinput8.dll) loaded\n", g_log);

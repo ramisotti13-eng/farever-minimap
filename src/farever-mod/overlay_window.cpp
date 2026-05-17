@@ -242,20 +242,30 @@ void render_thread_main() {
     // v0.5.1 (issue #18 part 1): wait for the first hero lock before
     // bringing up the DCOMP visual. Pre-v0.5.1 the visual was
     // created immediately at game-boot, which conflicted with
-    // Steam's notification toasts during character select (Steam
-    // friend-online / game-started popups got stuck or visually
-    // glitched). By the time the local Hero is locked the user is
-    // through character select and into the world, and Steam's
-    // notification animations have already finished their lifecycle.
+    // Steam's notification toasts during character select.
+    // v0.5.2: also wait for the lock to stay stable for ~1 s. Some
+    // games (potentially Farever in certain states) briefly create a
+    // preview Hero during character select / loading that would
+    // pass our isMe check; the stability period defers DCOMP setup
+    // until we're really in the world.
     int waited_100ms = 0;
-    while (!g_win.stop.load(std::memory_order_acquire) &&
-           hero_state_locked_ptr() == 0) {
+    constexpr int kStabilityRequired100ms = 10;   // 1 s stable lock
+    int stable_count = 0;
+    std::uintptr_t prev_locked = 0;
+    while (!g_win.stop.load(std::memory_order_acquire)) {
+        std::uintptr_t now_locked = hero_state_locked_ptr();
+        if (now_locked && now_locked == prev_locked) {
+            if (++stable_count >= kStabilityRequired100ms) break;
+        } else {
+            stable_count = 0;
+        }
+        prev_locked = now_locked;
         Sleep(100);
         ++waited_100ms;
     }
     if (g_win.stop.load()) return;
-    logf("overlay_window: hero locked after %d × 100ms, starting DCOMP",
-         waited_100ms);
+    logf("overlay_window: hero lock stable after %d × 100ms total, "
+         "starting DCOMP", waited_100ms);
 
     if (!create_d3d12())          return;
 
@@ -270,10 +280,11 @@ void render_thread_main() {
 
     auto next_frame = std::chrono::steady_clock::now();
     constexpr auto kFrameDur = std::chrono::microseconds(16'667);  // ~60 Hz
-    // v0.5.1: show/hide on F7 (was F11 in v0.5 but F11 is also the
-    // default toggle_clickthru keybind handled by the wndproc — same
-    // keypress was hitting both paths, which is confusing UX).
-    bool last_f7 = false;
+    // v0.5.1: show/hide on F7 (default). v0.5.2: rebindable via the
+    // toggle_overlay entry in keybinds.json — we poll
+    // overlay_get_toggle_overlay_key() each iteration so a live
+    // rebind takes effect on the next press.
+    bool last_toggle_key = false;
 
     // v0.4.17.11: track game window client size so we can resize the
     // swap chain when the game grows from its tiny loading window to
@@ -290,15 +301,41 @@ void render_thread_main() {
         }
     }
 
+    // v0.5.2 (kesmese #11): track hero-lock state so we can auto-hide
+    // the DCOMP visual the moment the hero gets dropped (server AFK
+    // kick → character select). Pre-v0.5.2 the last rendered frame
+    // stayed visible on character select, covering the game's
+    // post-kick UI with our stale minimap. Re-attach the visual when
+    // a new hero locks (back in world).
+    bool was_hero_locked = false;
+
     while (!g_win.stop.load(std::memory_order_acquire)) {
-        bool f7 = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
-        if (f7 && !last_f7) {
+        unsigned tk = overlay_get_toggle_overlay_key();
+        bool pressed = (GetAsyncKeyState(static_cast<int>(tk)) & 0x8000) != 0;
+        if (pressed && !last_toggle_key) {
             bool v = !g_win.visible.load();
             g_win.visible.store(v);
-            logf("overlay_window: F7 -> %s",
-                 v ? "rendering" : "blanked");
+            // v0.5.2 (kesmese #11 follow-up): properly hide via DCOMP
+            // SetContent(nullptr). Pre-v0.5.2 we only stopped the
+            // render thread, which left the last frame stuck on
+            // screen (the swap chain back buffer + DCOMP visual hold
+            // the last presented image, so DWM keeps compositing it).
+            // Detach the visual's content + commit so DCOMP shows
+            // nothing for our layer.
+            if (g_win.dcomp_visual && g_win.dcomp_device) {
+                g_win.dcomp_visual->SetContent(
+                    v ? static_cast<IUnknown*>(g_win.swap_chain)
+                      : nullptr);
+                g_win.dcomp_device->Commit();
+            }
+            // Force the smart-hover state false when hiding so any
+            // stale "cursor was on a button last frame" doesn't keep
+            // eating clicks after the overlay has been hidden.
+            if (!v) overlay_set_wants_real_input(false);
+            logf("overlay_window: toggle_overlay -> %s",
+                 v ? "visible" : "hidden");
         }
-        last_f7 = f7;
+        last_toggle_key = pressed;
 
         // Detect game window resize and resize our swap chain to match.
         RECT rc;
@@ -324,7 +361,37 @@ void render_thread_main() {
             }
         }
 
-        if (g_win.visible.load()) {
+        // v0.5.2: detect hero-lock edge transitions and toggle the
+        // DCOMP visual content accordingly. Lost lock → SetContent
+        // (null) so the last minimap frame doesn't stay glued on
+        // top of post-kick / character-select UI. New lock → re-
+        // attach. Also re-SetRoot defensively (kesmese #11 reported
+        // overlay disappearing after dungeon-instance entry — not
+        // reproducible locally, but a zone transition could in
+        // principle invalidate the composition tree; re-rooting at
+        // every lock edge is a cheap self-heal).
+        bool hero_locked_now = (hero_state_locked_ptr() != 0);
+        if (hero_locked_now != was_hero_locked &&
+            g_win.dcomp_visual && g_win.dcomp_device) {
+            g_win.dcomp_visual->SetContent(
+                hero_locked_now && g_win.visible.load()
+                    ? static_cast<IUnknown*>(g_win.swap_chain)
+                    : nullptr);
+            if (hero_locked_now && g_win.dcomp_target) {
+                // Defensive re-root in case the dungeon-entry zone
+                // transition tore down the composition target's
+                // child list. Cheap and idempotent.
+                g_win.dcomp_target->SetRoot(g_win.dcomp_visual);
+            }
+            g_win.dcomp_device->Commit();
+            if (!hero_locked_now) overlay_set_wants_real_input(false);
+            logf("overlay_window: hero lock %s, visual %s",
+                 hero_locked_now ? "acquired" : "lost",
+                 hero_locked_now ? "(re-)attached" : "detached");
+            was_hero_locked = hero_locked_now;
+        }
+
+        if (g_win.visible.load() && hero_locked_now) {
             overlay_on_present(g_win.swap_chain, g_win.queue);
             g_win.swap_chain->Present(1, 0);   // vsync
         }

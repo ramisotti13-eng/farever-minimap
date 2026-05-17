@@ -356,11 +356,19 @@ void calib_maybe_reload() {
 // raw Virtual-Key code ("toggle_dps": 121). Hot-reloaded on file
 // mtime change, same as the calibration json.
 struct Keybinds {
-    UINT toggle_dps         = VK_F10;
-    UINT toggle_minimap     = VK_F8;
-    UINT reset_dps          = VK_F9;
-    UINT toggle_clickthru   = VK_F11;   // issues #4 + #7
-    UINT toggle_dps_track   = VK_F12;   // issue #13
+    UINT toggle_dps          = VK_F10;
+    UINT toggle_minimap      = VK_F8;
+    UINT reset_dps           = VK_F9;
+    UINT toggle_clickthru    = VK_F11;   // issues #4 + #7
+    UINT toggle_dps_track    = VK_F12;   // issue #13
+    UINT toggle_overlay      = VK_F7;    // v0.5 overlay show/hide
+    UINT reset_positions     = VK_HOME;  // v0.5.2 issue #11: snap all
+                                         // overlay windows back to their
+                                         // default positions so a user
+                                         // who dragged one off-screen or
+                                         // onto a disconnected monitor
+                                         // can recover without editing
+                                         // imgui.ini or reinstalling.
 };
 Keybinds g_keybinds;
 
@@ -382,6 +390,20 @@ std::atomic<bool> g_dps_tracking_paused{false};
 // behaviour. Persisted to ui_state.json.
 float g_minimap_alpha = 1.0f;
 
+// v0.5.2: ImGui window background opacity multiplier (DPS, hotkeys,
+// fight detail). 0.30..1.00; 1.00 = unchanged. Persisted alongside
+// minimap_alpha. Compass window has its own opacity above, this is
+// for the text-content windows.
+float g_window_bg_alpha = 1.0f;
+
+// Apply g_window_bg_alpha to the cached kColBtnFill (alpha 235/255).
+// Returns the same RGB with scaled alpha.
+inline ImU32 window_bg_color() {
+    int a = (int)(235.0f * g_window_bg_alpha + 0.5f);
+    if (a < 0) a = 0; if (a > 255) a = 255;
+    return IM_COL32(32, 24, 12, a);
+}
+
 // 0.4.12 (issue #12): when true, the minimap renders only the bezel
 // ring + player arrow + buttons -- no mosaic image, no POI markers.
 // Set by overlay_render for the kSkeletonFrames following the post-
@@ -389,11 +411,19 @@ float g_minimap_alpha = 1.0f;
 // window with a near-zero ImGui draw count.
 std::atomic<bool> g_skeleton_minimap{false};
 
+// v0.5.2 issue #11: set by the reset-positions hotkey, consumed by each
+// of the four user-movable windows (minimap, DPS meter, fight detail,
+// hotkeys) on the very next frame to override their stored ImGui
+// position with the in-built default. overlay_render clears it after
+// the frame so the flag is single-shot.
+std::atomic<bool> g_reset_positions_request{false};
+
 // In-game rebind: the user clicks a slot in the keys panel, we set
 // this to the slot id, and the next non-modifier key press in
 // overlay_wndproc gets written into that slot (ESC cancels).
 enum class RebindSlot : int { None = 0, Dps = 1, Map = 2, Reset = 3,
-                              ClickThru = 4, DpsTrack = 5 };
+                              ClickThru = 4, DpsTrack = 5,
+                              Overlay = 6, ResetPos = 7 };
 std::atomic<int> g_rebind_listening{0};
 
 UINT key_from_name(std::string s) {
@@ -541,14 +571,25 @@ void keybinds_maybe_reload() {
     keybinds_extract_key(text, "reset_dps",          kb.reset_dps);
     keybinds_extract_key(text, "toggle_clickthru",   kb.toggle_clickthru);
     keybinds_extract_key(text, "toggle_dps_track",   kb.toggle_dps_track);
+    keybinds_extract_key(text, "toggle_overlay",     kb.toggle_overlay);
+    keybinds_extract_key(text, "reset_positions",    kb.reset_positions);
     g_keybinds = kb;
-    logf("overlay: keybinds reloaded (dps=%s map=%s reset=%s "
-         "clickthru=%s dps_track=%s)",
-         key_to_name(kb.toggle_dps).c_str(),
-         key_to_name(kb.toggle_minimap).c_str(),
-         key_to_name(kb.reset_dps).c_str(),
-         key_to_name(kb.toggle_clickthru).c_str(),
-         key_to_name(kb.toggle_dps_track).c_str());
+    std::string dps_n         = key_to_name(kb.toggle_dps);
+    std::string map_n         = key_to_name(kb.toggle_minimap);
+    std::string reset_n       = key_to_name(kb.reset_dps);
+    std::string clickthru_n   = key_to_name(kb.toggle_clickthru);
+    std::string dps_track_n   = key_to_name(kb.toggle_dps_track);
+    std::string overlay_n     = key_to_name(kb.toggle_overlay);
+    std::string reset_pos_n   = key_to_name(kb.reset_positions);
+    logf("overlay: keybinds reloaded (overlay=%s dps=%s map=%s reset=%s "
+         "clickthru=%s dps_track=%s reset_positions=%s)",
+         overlay_n.c_str(),
+         dps_n.c_str(),
+         map_n.c_str(),
+         reset_n.c_str(),
+         clickthru_n.c_str(),
+         dps_track_n.c_str(),
+         reset_pos_n.c_str());
 }
 
 const std::wstring& kUiStatePath() {
@@ -613,6 +654,12 @@ void ui_lock_load() {
         if (a > 1.00f) a = 1.00f;
         g_minimap_alpha = a;
     }
+    float wba = g_window_bg_alpha;
+    if (ui_state_extract_float(s, "window_bg_alpha", wba)) {
+        if (wba < 0.30f) wba = 0.30f;
+        if (wba > 1.00f) wba = 1.00f;
+        g_window_bg_alpha = wba;
+    }
 }
 
 void ui_lock_save() {
@@ -635,7 +682,8 @@ void ui_lock_save() {
       << "  \"compass_size\": " << g_compass_size_idx << ",\n"
       << "  \"clickthrough\": " << (g_clickthrough.load() ? "true" : "false") << ",\n"
       << "  \"dps_tracking_paused\": " << (g_dps_tracking_paused.load() ? "true" : "false") << ",\n"
-      << "  \"minimap_alpha\": " << g_minimap_alpha << "\n"
+      << "  \"minimap_alpha\": " << g_minimap_alpha << ",\n"
+      << "  \"window_bg_alpha\": " << g_window_bg_alpha << "\n"
       << "}\n";
 }
 
@@ -656,7 +704,9 @@ void keybinds_save() {
       << "  \"toggle_minimap\":     \"" << key_to_name(g_keybinds.toggle_minimap)   << "\",\n"
       << "  \"reset_dps\":          \"" << key_to_name(g_keybinds.reset_dps)        << "\",\n"
       << "  \"toggle_clickthru\":   \"" << key_to_name(g_keybinds.toggle_clickthru) << "\",\n"
-      << "  \"toggle_dps_track\":   \"" << key_to_name(g_keybinds.toggle_dps_track) << "\"\n"
+      << "  \"toggle_dps_track\":   \"" << key_to_name(g_keybinds.toggle_dps_track) << "\",\n"
+      << "  \"toggle_overlay\":     \"" << key_to_name(g_keybinds.toggle_overlay)   << "\",\n"
+      << "  \"reset_positions\":    \"" << key_to_name(g_keybinds.reset_positions)  << "\"\n"
       << "}\n";
 }
 
@@ -1208,12 +1258,18 @@ void render_minimap_window() {
         // alpha so they don't fade away. Persists on release.
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::TextDisabled("Opacity");
+        ImGui::TextDisabled("Minimap opacity");
         ImGui::SetNextItemWidth(140);
-        if (ImGui::SliderFloat("##minimap_alpha", &g_minimap_alpha,
-                               0.30f, 1.00f, "%.2f")) {
-            // dragging -- live preview, save below
+        ImGui::SliderFloat("##minimap_alpha", &g_minimap_alpha,
+                           0.30f, 1.00f, "%.2f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            ui_lock_save();
         }
+        // v0.5.2: DPS / hotkeys / fight-detail window background opacity
+        ImGui::TextDisabled("Window opacity");
+        ImGui::SetNextItemWidth(140);
+        ImGui::SliderFloat("##window_bg_alpha", &g_window_bg_alpha,
+                           0.30f, 1.00f, "%.2f");
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             ui_lock_save();
         }
@@ -1254,7 +1310,7 @@ void render_fight_detail_window() {
     FileTimeToSystemTime(&ft, &utc);
     SystemTimeToTzSpecificLocalTime(nullptr, &utc, &lt);
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,         kColBtnFill);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,         window_bg_color());
     ImGui::PushStyleColor(ImGuiCol_Border,           kColBezel);
     ImGui::PushStyleColor(ImGuiCol_TitleBg,          kColBtnFill);
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive,    kColBtnFill);
@@ -1387,7 +1443,7 @@ void render_keys_window() {
     if (!g_keys_open) return;
     if (!hero_state_read().locked) return;
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,      kColBtnFill);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,      window_bg_color());
     ImGui::PushStyleColor(ImGuiCol_Border,        kColBezel);
     ImGui::PushStyleColor(ImGuiCol_TitleBg,       kColBtnFill);
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, kColBtnFill);
@@ -1438,11 +1494,13 @@ void render_keys_window() {
             if (listen) ImGui::PopStyleColor(2);
             ImGui::PopID();
         };
+        row("Toggle Overlay",   RebindSlot::Overlay,   g_keybinds.toggle_overlay);
         row("Toggle DPS",       RebindSlot::Dps,       g_keybinds.toggle_dps);
         row("Toggle Minimap",   RebindSlot::Map,       g_keybinds.toggle_minimap);
         row("Reset DPS",        RebindSlot::Reset,     g_keybinds.reset_dps);
         row("Click-through",    RebindSlot::ClickThru, g_keybinds.toggle_clickthru);
         row("Pause DPS track",  RebindSlot::DpsTrack,  g_keybinds.toggle_dps_track);
+        row("Reset window pos", RebindSlot::ResetPos,  g_keybinds.reset_positions);
 
         // Live status (issue #4 / #7 + #13).
         ImGui::Spacing();
@@ -1512,6 +1570,8 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case RebindSlot::Reset:     g_keybinds.reset_dps        = vk; break;
                 case RebindSlot::ClickThru: g_keybinds.toggle_clickthru = vk; break;
                 case RebindSlot::DpsTrack:  g_keybinds.toggle_dps_track = vk; break;
+                case RebindSlot::Overlay:   g_keybinds.toggle_overlay   = vk; break;
+                case RebindSlot::ResetPos:  g_keybinds.reset_positions  = vk; break;
                 default: break;
             }
             g_rebind_listening.store(0);
@@ -1569,6 +1629,13 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                      : "ACTIVE (tracking damage events again)");
             return 0;
         }
+        if (vk == g_keybinds.reset_positions) {
+            g_reset_positions_request.store(true,
+                                            std::memory_order_release);
+            logf("overlay: %s reset_positions -> snapping all windows "
+                 "to defaults", key_to_name(vk).c_str());
+            return 0;
+        }
     }
 
     if (ImGui::GetCurrentContext() != nullptr) {
@@ -1588,7 +1655,15 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // ImGui so hover visuals work, but button / wheel events are
         // hidden from ImGui entirely. The game's wndproc always
         // receives them in this mode.
-        const bool ct = g_clickthrough.load();
+        // v0.5.2 (#13 ProsPurity): when the user is holding the
+        // right mouse button (Farever's camera-control gesture) we
+        // force click-through. Otherwise camera-rotation drags the
+        // cursor across the overlay and accidentally clicks/drags
+        // UI elements instead of attacking. With auto-clickthrough,
+        // any mouse activity while RMB is held passes straight to
+        // the game.
+        const bool rmb_held = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        const bool ct = g_clickthrough.load() || rmb_held;
         bool is_mouse_button =
             (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ||
              msg == WM_LBUTTONDBLCLK ||
@@ -1619,6 +1694,36 @@ LRESULT CALLBACK overlay_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // behind the overlay. g_overlay_wants_real_input is set
             // each frame from IsAnyItemHovered + IsAnyItemActive.
             if (g_overlay_wants_real_input.load(std::memory_order_acquire)) {
+                // v0.5.2 (issue #19): when we eat a button-DOWN, the
+                // user is physically still holding the mouse button.
+                // Farever uses an ALT-toggle to flip between cursor-
+                // visible (UI clicks) and camera mode (LMB held =
+                // attack). If the user clicks a UI element, then
+                // toggles ALT, the game checks LMB state via raw
+                // input + its own wndproc tracking and sees "held",
+                // triggering continuous auto-attack.
+                //
+                // Fix: forward a synthetic matching BUTTON-UP to the
+                // game's wndproc immediately after eating the DOWN.
+                // The game's tracked button-state stays "released"
+                // no matter what the physical mouse is doing, so the
+                // ALT-toggle doesn't trigger an attack from a
+                // captured click. (Doesn't help when smart hover lets
+                // a click pass through to a decorative area; that's
+                // by design.)
+                UINT up_msg = 0;
+                switch (msg) {
+                    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
+                        up_msg = WM_LBUTTONUP; break;
+                    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK:
+                        up_msg = WM_RBUTTONUP; break;
+                    case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK:
+                        up_msg = WM_MBUTTONUP; break;
+                }
+                if (up_msg) {
+                    CallWindowProcW(g_overlay.orig_wndproc, hwnd,
+                                    up_msg, 0, lp);
+                }
                 switch (msg) {
                     case WM_MOUSEMOVE:
                     case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
@@ -1932,7 +2037,7 @@ void render_imgui_window() {
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(560, 360), ImGuiCond_FirstUseEver);
 
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,    kColBtnFill);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,    window_bg_color());
     ImGui::PushStyleColor(ImGuiCol_Border,      kColBezel);
     ImGui::PushStyleColor(ImGuiCol_TitleBg,     kColBtnFill);
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, kColBtnFill);
@@ -2463,6 +2568,21 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+
+    // v0.5.2 issue #11: reset-positions hotkey. SetWindowPos by name
+    // works on the stored ImGui window state regardless of whether
+    // the window is currently rendering, so a closed Hotkeys panel
+    // (or a Fight Detail with no fight selected) still gets its
+    // position fixed for next open. Use the ###id suffix for the
+    // fight-detail window since its visible title changes per fight.
+    if (g_reset_positions_request.exchange(false,
+                                           std::memory_order_acq_rel)) {
+        ImGui::SetWindowPos("minimap",         ImVec2(600,  20));
+        ImGui::SetWindowPos("DPS Meter",       ImVec2( 40,  40));
+        ImGui::SetWindowPos("Hotkeys",         ImVec2(620, 540));
+        ImGui::SetWindowPos("###fight_detail", ImVec2(240, 240));
+    }
+
     render_diagnostic_box();
     render_imgui_window();
     render_minimap_window();
@@ -2613,6 +2733,12 @@ void overlay_set_standalone_window(bool on) {
 }
 void overlay_set_window_hwnd(void* hwnd) {
     g_overlay_hwnd_override.store(reinterpret_cast<HWND>(hwnd));
+}
+void overlay_set_wants_real_input(bool on) {
+    g_overlay_wants_real_input.store(on);
+}
+unsigned overlay_get_toggle_overlay_key() {
+    return g_keybinds.toggle_overlay;
 }
 
 void overlay_on_present(IDXGISwapChain3* swap_chain,
