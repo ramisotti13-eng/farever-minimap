@@ -61,34 +61,81 @@ end
 
 ```lua
 -- Position and orientation
-farever.player.x()             -- world X
-farever.player.y()             -- world Y
-farever.player.z()             -- world Z
-farever.player.rot_z()         -- heading in radians
-farever.player.locked()        -- true once the mod has identified you
+farever.player.x()                          -- world X
+farever.player.y()                          -- world Y
+farever.player.z()                          -- world Z
+farever.player.rot_z()                      -- heading in radians
+farever.player.locked()                     -- true once the mod has identified you
 
 -- Combat state
-farever.player.in_combat()     -- the game's in-combat flag
-farever.player.combat_start()  -- game-time when combat began
+farever.player.in_combat()                  -- the game's in-combat flag
+farever.player.combat_start()               -- game-time when combat began
+farever.player.has_target()                 -- true if Hero.target is non-zero
 
--- Health and resources
-farever.player.health()        -- current HP
-farever.player.max_health()    -- max HP
-farever.player.health_pct()    -- health / max_health, 0.0 .. 1.0
-farever.player.health_regen()  -- regen rate
-farever.player.shield()        -- shield value
-farever.player.energy()        -- special energy pool
+-- Progression
+farever.player.level()                      -- character level
 
--- Defense and progression
-farever.player.armor()         -- physical armor
-farever.player.magic_armor()   -- magic armor
-farever.player.level()         -- character level
+-- Health and energy
+farever.player.health()                     -- current HP
+farever.player.max_health()                 -- max HP
+farever.player.health_pct()                 -- health / max_health, 0.0 .. 1.0
+farever.player.health_regen()               -- HP regen rate
+farever.player.shield()                     -- shield value
+farever.player.energy()                     -- special energy pool
+farever.player.energy_regen()               -- special energy regen rate
+
+-- Primary stats
+farever.player.vitality()
+farever.player.strength()
+farever.player.dexterity()
+farever.player.faith()
+farever.player.intellect()
+
+-- Combat numbers (post-rating, ready-to-display values)
+farever.player.crit_chance()                -- 0.0 .. 1.0
+farever.player.crit_damage()                -- multiplier
+farever.player.armor_penetration()
+farever.player.spell_penetration()
+farever.player.fervor()
+farever.player.block_mitigation()
+farever.player.dodge_chance()               -- 0.0 .. 1.0
+farever.player.magic_mastery()
+farever.player.physical_mastery()
+farever.player.spell_cast_time_reduction()
+farever.player.knock_resistance()
+farever.player.cooldown_reduction()
+
+-- Defense
+farever.player.armor()                      -- physical armor
+farever.player.magic_armor()                -- magic armor
+farever.player.magic_reduction()
+
+-- Generic modifiers
+farever.player.move_speed_factor()
+farever.player.damage()                     -- base damage modifier
+farever.player.heal()                       -- base heal output
+
+-- Hero-only class resources (zero if the runtime type is not Hero)
+farever.player.poise()
+farever.player.poise_regen()
+farever.player.oxygen()
+farever.player.rage()
+farever.player.rage_regen()
+farever.player.spark()
+farever.player.spark_regen()
+farever.player.combo_point()
+farever.player.focus()
+farever.player.damage_modifier()            -- post-buff outgoing damage scale
+farever.player.damage_taken_modifier()      -- incoming damage scale
+farever.player.heal_given_multiplier()
+farever.player.shield_power_multiplier()
+farever.player.glide_speed()
 
 -- DPS meter snapshot
-farever.dps.current()          -- current pull's DPS (float)
-farever.dps.total()            -- current pull's total damage
-farever.dps.elapsed()          -- seconds since the pull started
-farever.dps.in_combat()        -- true while the pull is still active
+farever.dps.current()                       -- current pull's DPS (float)
+farever.dps.total()                         -- current pull's total damage
+farever.dps.elapsed()                       -- seconds since the pull started
+farever.dps.in_combat()                     -- true while the pull is still active
 ```
 
 All of these are functions you call. They return the value at the
