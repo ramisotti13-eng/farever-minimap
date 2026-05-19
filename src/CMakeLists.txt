@@ -57,6 +57,69 @@ target_include_directories(imgui
 )
 target_compile_features(imgui PUBLIC cxx_std_17)
 
+# Lua 5.4 — embedded scripting runtime for the plugin system. Plugin
+# authors write .lua files into the user's data/plugins/ folder, the
+# mod loads them automatically and gives them a curated read-only API
+# + ImGui-subset for drawing their own overlay windows. Lua is MIT
+# licensed; the upstream tarball ships C sources but no CMakeLists,
+# so we create the static target ourselves (same approach as ImGui).
+FetchContent_Declare(
+    lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG        v5.4.7
+)
+FetchContent_MakeAvailable(lua)
+
+# Build Lua sources into a static library. We deliberately omit
+# lua.c (interpreter entry point) and onelua.c (one-file build helper);
+# only the runtime is needed.
+file(GLOB LUA_SOURCES
+    "${lua_SOURCE_DIR}/lapi.c"
+    "${lua_SOURCE_DIR}/lauxlib.c"
+    "${lua_SOURCE_DIR}/lbaselib.c"
+    "${lua_SOURCE_DIR}/lcode.c"
+    "${lua_SOURCE_DIR}/lcorolib.c"
+    "${lua_SOURCE_DIR}/lctype.c"
+    "${lua_SOURCE_DIR}/ldblib.c"
+    "${lua_SOURCE_DIR}/ldebug.c"
+    "${lua_SOURCE_DIR}/ldo.c"
+    "${lua_SOURCE_DIR}/ldump.c"
+    "${lua_SOURCE_DIR}/lfunc.c"
+    "${lua_SOURCE_DIR}/lgc.c"
+    "${lua_SOURCE_DIR}/linit.c"
+    "${lua_SOURCE_DIR}/liolib.c"
+    "${lua_SOURCE_DIR}/llex.c"
+    "${lua_SOURCE_DIR}/lmathlib.c"
+    "${lua_SOURCE_DIR}/lmem.c"
+    "${lua_SOURCE_DIR}/loadlib.c"
+    "${lua_SOURCE_DIR}/lobject.c"
+    "${lua_SOURCE_DIR}/lopcodes.c"
+    "${lua_SOURCE_DIR}/loslib.c"
+    "${lua_SOURCE_DIR}/lparser.c"
+    "${lua_SOURCE_DIR}/lstate.c"
+    "${lua_SOURCE_DIR}/lstring.c"
+    "${lua_SOURCE_DIR}/lstrlib.c"
+    "${lua_SOURCE_DIR}/ltable.c"
+    "${lua_SOURCE_DIR}/ltablib.c"
+    "${lua_SOURCE_DIR}/ltm.c"
+    "${lua_SOURCE_DIR}/lundump.c"
+    "${lua_SOURCE_DIR}/lutf8lib.c"
+    "${lua_SOURCE_DIR}/lvm.c"
+    "${lua_SOURCE_DIR}/lzio.c"
+)
+# We include the full Lua runtime here (including io/os libs because
+# linit.c references their symbols). The plugin sandbox is enforced
+# at lua_State setup time in plugins.cpp by removing dangerous globals
+# (io, os.execute, os.remove, os.exit, package.loadlib, dofile,
+# loadfile, require) before any plugin code runs.
+add_library(lua STATIC ${LUA_SOURCES})
+target_include_directories(lua PUBLIC ${lua_SOURCE_DIR})
+# Lua 5.4 compiles as C99. MSVC warnings about secure CRT are noise.
+target_compile_definitions(lua PRIVATE _CRT_SECURE_NO_WARNINGS)
+if (MSVC)
+    target_compile_options(lua PRIVATE /wd4244 /wd4267 /wd4310 /wd4334)
+endif()
+
 add_subdirectory(minimap-dll)
 add_subdirectory(dpsmeter-dll)
 add_subdirectory(injector)

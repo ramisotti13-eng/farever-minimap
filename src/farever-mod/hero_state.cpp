@@ -18,6 +18,7 @@
 #include "mem_scan.h"
 #include "log.h"
 #include "progress_state.h"
+#include "plugins.h"
 
 #include <windows.h>
 
@@ -430,6 +431,7 @@ static void hero_state_tick_body(std::uint64_t n, std::uintptr_t locked) {
              (unsigned long long)n,
              (unsigned long long)locked);
         debug_dump_hero(verb, found);
+        plugins_emit_hero_locked();
         progress_state_inspect(found);   // Phase 2A diagnostic
         locked = found;
     } else if (!retry.empty()) {

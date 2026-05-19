@@ -214,20 +214,44 @@ void write_amd_repair_files() {
          ok_txt  ? "ok" : "FAIL");
 }
 
+// Returns the first visible top-level HWND owned by our process, or
+// nullptr if none. Shared by initial wait + later refresh.
+HWND find_game_window() {
+    HWND found = nullptr;
+    EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (pid != GetCurrentProcessId()) return TRUE;
+        if (!IsWindowVisible(h))           return TRUE;
+        HWND* out = reinterpret_cast<HWND*>(lp);
+        *out = h;
+        return FALSE;
+    }, reinterpret_cast<LPARAM>(&found));
+    return found;
+}
+
+// HWND is good iff it is still a window AND GetClientRect succeeds
+// with plausible dimensions. The plausibility bound catches the
+// stale-HWND case where GetClientRect can return success-with-garbage
+// (issue #29 saw client=4294967293x0).
+bool hwnd_has_plausible_client_rect(HWND h, UINT* out_w = nullptr,
+                                    UINT* out_h = nullptr) {
+    if (!h || !IsWindow(h)) return false;
+    RECT rc{};
+    if (!GetClientRect(h, &rc)) return false;
+    LONG w = rc.right - rc.left;
+    LONG hgt = rc.bottom - rc.top;
+    if (w <= 0 || hgt <= 0 || w > 16384 || hgt > 16384) return false;
+    if (out_w) *out_w = static_cast<UINT>(w);
+    if (out_h) *out_h = static_cast<UINT>(hgt);
+    return true;
+}
+
 // v0.4.17.9: find the game's window (must wait for the game to
 // create it). Polls for up to ~30 s.
 bool wait_for_game_window() {
     for (int i = 0; i < 300; ++i) {
-        HWND found = nullptr;
-        EnumWindows([](HWND h, LPARAM lp) -> BOOL {
-            DWORD pid = 0;
-            GetWindowThreadProcessId(h, &pid);
-            if (pid != GetCurrentProcessId()) return TRUE;
-            if (!IsWindowVisible(h))           return TRUE;
-            HWND* out = reinterpret_cast<HWND*>(lp);
-            *out = h;
-            return FALSE;
-        }, reinterpret_cast<LPARAM>(&found));
+        HWND found = find_game_window();
         if (found) {
             g_win.game_hwnd = found;
             logf("overlay_window: game hwnd=%p found after %d × 100ms",
@@ -237,6 +261,46 @@ bool wait_for_game_window() {
         Sleep(100);
     }
     logf("overlay_window: timed out waiting for game window");
+    return false;
+}
+
+// v0.5.2.4 issue #31 / #29: between wait_for_game_window (boot-time)
+// and DCOMP setup (after hero lock stable, often 30+ s later) the
+// game can destroy + recreate its window. The cached HWND then comes
+// back as IsWindow=false (or GetClientRect=garbage), and the old
+// abort-on-0x0 path gave up permanently. This walks the window list
+// again, with retries, so a recreated window still gets picked up.
+//
+// Retries also cover the brief window during which the old HWND is
+// gone but the new one has not been shown yet.
+bool refresh_game_hwnd_if_stale() {
+    UINT w = 0, h = 0;
+    if (hwnd_has_plausible_client_rect(g_win.game_hwnd, &w, &h)) return true;
+
+    HWND old = g_win.game_hwnd;
+    logf("overlay_window: cached hwnd=%p no longer valid, re-enumerating",
+         (void*)old);
+
+    for (int i = 0; i < 50; ++i) {           // ~5 s total
+        HWND candidate = find_game_window();
+        if (candidate && candidate != old &&
+            hwnd_has_plausible_client_rect(candidate, &w, &h)) {
+            g_win.game_hwnd = candidate;
+            logf("overlay_window: refreshed hwnd=%p (was %p) after %d × 100ms, "
+                 "client=%ux%u",
+                 (void*)candidate, (void*)old, i, w, h);
+            return true;
+        }
+        // Also accept the same hwnd coming back to life (rare but cheap).
+        if (candidate && candidate == old &&
+            hwnd_has_plausible_client_rect(candidate, &w, &h)) {
+            logf("overlay_window: cached hwnd recovered after %d × 100ms, "
+                 "client=%ux%u", i, w, h);
+            return true;
+        }
+        Sleep(100);
+    }
+    logf("overlay_window: no valid game window after 5 s of retries, giving up");
     return false;
 }
 
@@ -292,32 +356,27 @@ bool create_d3d12() {
         }
     }
 
-    RECT rc;
-    GetClientRect(g_win.game_hwnd, &rc);
-    UINT w = static_cast<UINT>(rc.right - rc.left);
-    UINT h = static_cast<UINT>(rc.bottom - rc.top);
+    // v0.5.2.4 issue #29 / #31: the cached HWND from boot may be dead
+    // by the time we get here (game recreated its window during the
+    // hero-lock wait). Validate and refresh before we commit numbers
+    // to DXGI, otherwise GetClientRect on a dead handle returns garbage
+    // (#29 logged client=4294967293x0) and the composition swap chain
+    // rejects everything.
+    if (!refresh_game_hwnd_if_stale()) {
+        factory->Release();
+        return false;
+    }
+
+    UINT w = 0, h = 0;
+    hwnd_has_plausible_client_rect(g_win.game_hwnd, &w, &h);
 
     // v0.5.2.3 issue #20/#21/#25/#26: log raw window dimensions +
     // style so we can correlate composition swap chain failures with
-    // what the game window looks like at that moment. Note we
-    // deliberately do not try to label this "exclusive fullscreen"
-    // vs "borderless at native res" — both produce identical
-    // WS_POPUP + monitor-size signatures, and the labelling caused
-    // a confusing false-positive warning in NVIDIA users' logs
-    // before the (working) DCOMP attempt. For issue #24 the raw
-    // numbers plus the user's "is the overlay visible" report are
-    // what we actually need.
+    // what the game window looks like at that moment.
     {
         LONG style = GetWindowLongW(g_win.game_hwnd, GWL_STYLE);
         logf("overlay_window: client=%ux%u style=0x%08lx",
              w, h, (unsigned long)style);
-    }
-    if (w == 0 || h == 0) {
-        logf("overlay_window: game window has 0x0 client area, "
-             "aborting DCOMP setup. Game may have been minimized "
-             "during the hero-lock stability window.");
-        factory->Release();
-        return false;
     }
 
     // v0.5.2.1 issue #20/#21: try composition swap chain with several
@@ -642,7 +701,41 @@ void render_thread_main() {
 
         if (g_win.visible.load() && hero_locked_now) {
             overlay_on_present(g_win.swap_chain, g_win.queue);
-            g_win.swap_chain->Present(1, 0);   // vsync
+
+            // v0.5.3 issue #30: Present1 with a tight dirty rect so DWM
+            // only re-composites the region where our UI lives. On
+            // ultrawide screens the savings are huge — our buffer is
+            // game-window-sized (3440×1440 in the reporter's case) but
+            // our visible content typically occupies <10% of that.
+            // We union with the previous frame's rect so a window
+            // moving / closing properly clears its old footprint from
+            // DWM's cached composite.
+            static RECT s_prev_dirty{0, 0, 0, 0};
+            static bool s_prev_valid = false;
+
+            int dx = 0, dy = 0, dw = 0, dh = 0;
+            HRESULT hr = E_FAIL;
+            if (overlay_get_dirty_rect(&dx, &dy, &dw, &dh)) {
+                if (dx + dw > (int)current_w) dw = (int)current_w - dx;
+                if (dy + dh > (int)current_h) dh = (int)current_h - dy;
+                RECT cur{ dx, dy, dx + dw, dy + dh };
+                RECT combined = cur;
+                if (s_prev_valid) {
+                    if (s_prev_dirty.left   < combined.left)   combined.left   = s_prev_dirty.left;
+                    if (s_prev_dirty.top    < combined.top)    combined.top    = s_prev_dirty.top;
+                    if (s_prev_dirty.right  > combined.right)  combined.right  = s_prev_dirty.right;
+                    if (s_prev_dirty.bottom > combined.bottom) combined.bottom = s_prev_dirty.bottom;
+                }
+                s_prev_dirty = cur;
+                s_prev_valid = true;
+                DXGI_PRESENT_PARAMETERS pp{};
+                pp.DirtyRectsCount = 1;
+                pp.pDirtyRects = &combined;
+                hr = g_win.swap_chain->Present1(1, 0, &pp);
+            }
+            if (FAILED(hr)) {
+                g_win.swap_chain->Present(1, 0);
+            }
         }
 
         next_frame += kFrameDur;

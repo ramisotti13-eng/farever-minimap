@@ -67,4 +67,13 @@ void overlay_set_wants_real_input(bool on);
 // last keybinds_maybe_reload() result.
 unsigned overlay_get_toggle_overlay_key();
 
+// v0.5.3 issue #30: union bounding box of all ImGui content drawn in
+// the most recent overlay_on_present, in pixel coordinates of the
+// overlay swap chain. Used by overlay_window to feed dirty rects to
+// IDXGISwapChain1::Present1 so DWM only re-composites the regions
+// where our UI actually lives, not the entire 3440×1440 of empty
+// transparent buffer. Returns false if no content was drawn (caller
+// should fall back to a full Present).
+bool overlay_get_dirty_rect(int* x, int* y, int* w, int* h);
+
 }  // namespace farever

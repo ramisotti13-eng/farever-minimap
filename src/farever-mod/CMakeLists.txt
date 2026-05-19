@@ -18,12 +18,14 @@ add_library(farever_mod SHARED
     overlay.cpp
     overlay_window.cpp
     d3d12_hook.cpp
+    plugins.cpp
     dinput8.def
 )
 
 target_link_libraries(farever_mod PRIVATE
     minhook
     imgui
+    lua
     d3d12
     dxgi
     d3dcompiler

@@ -13,6 +13,7 @@
 #include "poi_progress.h"
 #include "skill_resolve.h"
 #include "entity_state.h"
+#include "plugins.h"
 
 #include <unordered_map>
 
@@ -693,6 +694,7 @@ void ui_lock_load() {
     g_loot_counter_visible.store(
         s.find("\"loot_counter_visible\": false") == std::string::npos &&
         s.find("\"loot_counter_visible\":false")  == std::string::npos);
+
 }
 
 void ui_lock_save() {
@@ -1123,19 +1125,20 @@ void render_compass(const HeroSnapshot& h) {
         ImVec2 dot_local = player_to_screen(h.x, h.y, view, size);
         ImVec2 dot(p_min.x + dot_local.x, p_min.y + dot_local.y);
         float c = cosf((float)h.rot_z), s = sinf((float)h.rot_z);
+        float arr =
+            (size <= 256.0f) ? 9.0f : (size <= 384.0f) ? 11.0f : 13.0f;
         if (g_overlay.player_arrow.resource) {
-            float arr =
-                (size <= 256.0f) ? 9.0f : (size <= 384.0f) ? 11.0f : 13.0f;
             auto rot = [&](float lx, float ly) {
                 return ImVec2(dot.x + lx * c - ly * s,
                               dot.y + lx * s + ly * c);
             };
             ImVec2 p0 = rot(-arr, -arr), p1 = rot(arr, -arr);
-            ImVec2 p2 = rot( arr,  arr), p3 = rot(-arr, arr);
-            dl->AddImageQuad((ImTextureID)g_overlay.player_arrow.srv_gpu.ptr,
-                             p0, p1, p2, p3,
-                             ImVec2(0, 0), ImVec2(1, 0),
-                             ImVec2(1, 1), ImVec2(0, 1));
+            ImVec2 p2 = rot( arr,  arr), p3 = rot(-arr,  arr);
+            dl->AddImageQuad(
+                (ImTextureID)g_overlay.player_arrow.srv_gpu.ptr,
+                p0, p1, p2, p3,
+                ImVec2(0, 0), ImVec2(1, 0),
+                ImVec2(1, 1), ImVec2(0, 1));
         } else {
             dl->AddLine(dot, {dot.x + c * 14.0f, dot.y + s * 14.0f},
                         kColPlayer, 2.0f);
@@ -1304,6 +1307,11 @@ void render_minimap_window() {
         if (ImGui::Checkbox("Show loot counter", &loot_on)) {
             g_loot_counter_visible.store(loot_on);
             ui_lock_save();
+        }
+
+        bool plugins_on = plugins_manager_visible();
+        if (ImGui::Checkbox("Show plugin manager", &plugins_on)) {
+            plugins_manager_toggle();
         }
 
         // Opacity slider (issue #2). Affects mosaic + bezel ring;
@@ -2199,6 +2207,8 @@ bool overlay_init(IDXGISwapChain3* swap_chain,
     logf("overlay: DX12+ImGui init OK (hwnd=%p, buffers=%u, fmt=%d)",
          g_overlay.hwnd, g_overlay.back_buffer_count,
          static_cast<int>(g_overlay.rt_format));
+
+    plugins_start();
     return true;
 }
 
@@ -2786,6 +2796,8 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0
     render_keys_window();
     render_fight_detail_window();
     render_loot_counter_window();
+    plugins_tick();
+    plugins_render_manager();
 
     // v0.5.1 smart hover (issue #7): cache whether the cursor is over
     // an actually interactive widget (button, selectable, title bar
@@ -2939,6 +2951,56 @@ unsigned overlay_get_toggle_overlay_key() {
     return g_keybinds.toggle_overlay;
 }
 
+// Issue #30: walks the most recent ImDrawData and unions the clip
+// rects of every non-empty draw command. Returns the bounding box of
+// all UI content the user actually sees, in swap-chain pixel coords.
+// The caller (overlay_window) passes this as a DXGI dirty rect to
+// Present1 so DWM does not have to re-composite the empty regions of
+// our full-screen-sized overlay buffer every frame.
+bool overlay_get_dirty_rect(int* x, int* y, int* w, int* h) {
+    if (!x || !y || !w || !h) return false;
+    ImDrawData* dd = ImGui::GetDrawData();
+    if (!dd || dd->CmdListsCount == 0) return false;
+
+    bool any = false;
+    float L = 0.0f, T = 0.0f, R = 0.0f, B = 0.0f;
+    for (int i = 0; i < dd->CmdListsCount; ++i) {
+        const ImDrawList* cl = dd->CmdLists[i];
+        for (int c = 0; c < cl->CmdBuffer.Size; ++c) {
+            const ImDrawCmd& cmd = cl->CmdBuffer[c];
+            if (cmd.ElemCount == 0) continue;
+            const float l = cmd.ClipRect.x;
+            const float t = cmd.ClipRect.y;
+            const float r = cmd.ClipRect.z;
+            const float b = cmd.ClipRect.w;
+            if (l >= r || t >= b) continue;
+            if (!any) {
+                L = l; T = t; R = r; B = b;
+                any = true;
+            } else {
+                if (l < L) L = l;
+                if (t < T) T = t;
+                if (r > R) R = r;
+                if (b > B) B = b;
+            }
+        }
+    }
+    if (!any) return false;
+
+    // A few-pixel pad guards against antialiased edges and shadows
+    // bleeding outside their clip rect (drop shadows, dropdowns).
+    constexpr float kPad = 2.0f;
+    L -= kPad; T -= kPad; R += kPad; B += kPad;
+    if (L < 0.0f) L = 0.0f;
+    if (T < 0.0f) T = 0.0f;
+
+    *x = static_cast<int>(L);
+    *y = static_cast<int>(T);
+    *w = static_cast<int>(R - L);
+    *h = static_cast<int>(B - T);
+    return *w > 0 && *h > 0;
+}
+
 void overlay_on_present(IDXGISwapChain3* swap_chain,
                         ID3D12CommandQueue* caller_queue) {
     if (g_overlay_killed.load()) {
@@ -3011,6 +3073,7 @@ void overlay_shutdown() {
         g_overlay.orig_wndproc = nullptr;
     }
     if (g_overlay.initialized) {
+        plugins_stop();
         for (auto& f : g_overlay.frames) {
             if (!wait_for_frame(f, 1000)) {
                 logf("overlay: shutdown drain timed out");

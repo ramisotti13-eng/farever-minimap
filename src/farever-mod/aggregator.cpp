@@ -8,6 +8,7 @@
 #include "damage.h"
 #include "hero_state.h"
 #include "log.h"
+#include "plugins.h"
 
 #include <windows.h>
 
@@ -93,6 +94,9 @@ void seal_active_fight(double elapsed_sec) {
          "top=%s, %zu skills)",
          e.id, e.duration_sec, e.total_damage, e.dps, e.top_skill,
          e.row_count);
+
+    plugins_emit_fight_end(e.id, e.duration_sec, e.total_damage,
+                           e.dps, e.top_skill);
 }
 
 void clear_active_fight() {
@@ -126,8 +130,12 @@ void record(const DamageEvent& ev) {
         g_fight.have_first_damage = true;
         g_fight.first_damage_tick = now;
         logf("aggregator: combat START (%s)", skill);
+        plugins_emit_fight_start(g_next_fight_id);
     }
     g_fight.last_damage_tick = now;
+
+    plugins_emit_damage_dealt(skill, ev.damage,
+                              ev.is_crit != 0, ev.is_kill != 0);
 
     // One DamageEvent == one impact. ev.hit_count is the tick ordinal
     // (channels increment it 1, 2, 3 ...) so we never sum it; we just
