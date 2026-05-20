@@ -137,41 +137,19 @@ farever.dps.total()                         -- current pull's total damage
 farever.dps.elapsed()                       -- seconds since the pull started
 farever.dps.in_combat()                     -- true while the pull is still active
 
--- Foes (mobs, bosses, NPCs the mod has spotted in the world)
-farever.foes.count()                        -- number of tracked foes
-farever.foes.list()                         -- array of foe tables, nearest first
-farever.foes.target()                       -- the foe the player is targeting, or nil
-farever.foes.nearest()                      -- closest foe, or nil
-farever.foes.in_combat()                    -- how many tracked foes are in combat
 ```
-
-Each foe table from `farever.foes.list()` / `target()` / `nearest()`
-has these fields:
-
-```lua
-foe.x, foe.y, foe.z       -- world position
-foe.rot_z                 -- heading in radians
-foe.dist                  -- distance to your character (0 if no lock)
-foe.hp                    -- current HP
-foe.max_hp                -- max HP
-foe.hp_pct                -- 0.0 .. 1.0
-foe.shield                -- shield value
-foe.level                 -- foe's level (integer)
-foe.in_combat             -- the foe's own isInCombat flag
-foe.has_target            -- the foe has a target (someone aggro'd them)
-foe.is_target             -- you are currently targeting this foe
-```
-
-The list is sorted nearest-first. The tracker holds up to 32 foes at
-a time; if more than 32 spawn at once the oldest entries get pruned.
-Foes whose game pointers go stale (killed, GC'd, despawned) drop out
-of the list within a few frames.
 
 All of these are functions you call. They return the value at the
 moment you ask. They never block. If the mod has not identified your
 character yet (`locked()` returns false) the resource and defense
-readers return 0 so plugin code can use them unconditionally; foe
-distances likewise default to 0 until lock-on.
+readers return 0 so plugin code can use them unconditionally.
+
+> **Foes API note.** v0.5.3.1 shipped a `farever.foes.*` table for
+> tracking mobs and bosses. It was the source of a crash a few
+> seconds after the hero locks, so v0.5.3.2 pulled the whole thing
+> out. If you already wrote a plugin against it, the table is `nil`
+> now. A new foe-tracker is on the roadmap once the read path is
+> rebuilt in isolation.
 
 ## Events
 

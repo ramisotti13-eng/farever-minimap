@@ -24,7 +24,7 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
 There are two parallel builds on the [Releases page](../../releases).
 Pick once and stick with it.
 
-* **[v0.5.3](../../releases/latest)** — the main, actively developed
+* **[v0.5.3.2](../../releases/latest)** — the main, actively developed
   build. Use this unless your machine cannot run it.
 * **[v0.4.15](../../releases/tag/v0.4.15)** — a frozen legacy build
   for users where v0.5.x cannot get the overlay up. This mostly hits
@@ -33,7 +33,7 @@ Pick once and stick with it.
   game's swap chain and avoids the DirectComposition path entirely,
   which dodges that whole class of problem.
 
-| Feature                              | v0.5.3                        | v0.4.15                              |
+| Feature                              | v0.5.3.2                      | v0.4.15                              |
 | ------------------------------------ | ----------------------------- | ------------------------------------ |
 | Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
 | Loot tracker window                  | Yes                           | No                                   |
@@ -43,7 +43,7 @@ Pick once and stick with it.
 | Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
 | Known long-session access violation  | No                            | Possible after long AFK DPS farming  |
 
-If v0.5.3 does not bring up the overlay on your machine, try v0.4.15
+If v0.5.3.2 does not bring up the overlay on your machine, try v0.4.15
 before opening an issue. If neither works, then open the issue and
 attach `farever-mod.log` from your Farever folder.
 
@@ -256,9 +256,11 @@ is the fastest way to narrow the cause.
   "UI scale (text)" slider, 2.0x to 2.5x is usually right for
   a 48 inch 4K display.
 
-## What's new in 0.5.3.1
+## What's new in 0.5.3.2
 
-A minor release on top of 0.5.3 with no user-visible changes outside the plugin runtime. The mod itself looks and behaves identically. What changed is what plugin authors can read from the game.
+A bug-fix release. The foe tracker introduced in 0.5.3.1 caused a crash a few seconds after the hero locks on some setups. It is removed in 0.5.3.2 along with the `farever.foes.*` table that depended on it. A new foe tracker will return in a later release once the read path is rebuilt in isolation.
+
+Everything else from 0.5.3.1 stays in:
 
 * **Full Hero attribute surface for plugins**. The Hero exposed only
   position, heading, lock state and the in-combat flag in v0.5.3.
@@ -272,15 +274,12 @@ A minor release on top of 0.5.3 with no user-visible changes outside the plugin 
   populate one snapshot; the API stays a simple `farever.player.X()`
   getter set.
 
-* **Mob and boss tracker** via `farever.foes.*`. New `foe_state`
-  module hooks `ent.Foe` allocations and maintains a bounded
-  32-entry list, sorted nearest-first. `farever.foes.list()`,
-  `target()`, `nearest()` and `count()` give plugins access to each
-  foe's position, HP, level, shield, in-combat flag and a flag for
-  whether the player is currently targeting it. Same render-thread
-  validation pattern as the Hero watcher (type tag, pointer userland,
-  NaN guard, three-frame stale prune). This is the surface that
-  unlocks boss cast-bar HUDs, mechanic warners and threat displays.
+Plus a handful of defensive fixes that fell out of a 0.5.3.1 code
+review: HeroAttributes type-tag check before reading the Hero-only
+block, mutex around the snapshot, atomic `farever.store.set` writes
+(no more wiped personal_best on crash), bounded event / toast queues,
+larger `imgui.input_text` buffer, and a `data/no_plugins.flag`
+escape hatch.
 
 Plugin authoring guide at
 [`data/plugins/README.md`](data/plugins/README.md).
