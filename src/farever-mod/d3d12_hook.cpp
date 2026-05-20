@@ -10,7 +10,6 @@
 #include "log.h"
 #include "damage.h"
 #include "hero_state.h"
-#include "foe_state.h"
 #include "entity_state.h"
 
 #include <windows.h>
@@ -42,7 +41,6 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain3* self,
                                        UINT sync_interval, UINT flags) {
     damage_tick();
     hero_state_tick();
-    foe_state_tick();
     return g_orig_present(self, sync_interval, flags);
 }
 

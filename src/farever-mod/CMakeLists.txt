@@ -19,7 +19,6 @@ add_library(farever_mod SHARED
     overlay_window.cpp
     d3d12_hook.cpp
     plugins.cpp
-    foe_state.cpp
     dinput8.def
 )
 

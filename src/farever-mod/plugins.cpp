@@ -13,7 +13,6 @@
 #include "plugins.h"
 #include "log.h"
 #include "hero_state.h"
-#include "foe_state.h"
 #include "aggregator.h"
 
 extern "C" {
@@ -81,6 +80,17 @@ struct PluginEvent {
 };
 
 std::vector<Plugin>      g_plugins;
+// v0.5.3.2 (#6): mirror of g_plugins.size() for the lock-free fast
+// path in plugins_emit_*. Render thread calls emit_* every Present and
+// has historically called g_plugins.empty() without a lock — fine when
+// the vector is stable, but a hot reload from the overlay thread can
+// reallocate the storage and torn the size read. The atomic is
+// maintained on every scan / reload / stop.
+std::atomic<int>         g_plugin_count{0};
+// v0.5.3.3 diagnostic kill switch. When true plugins_start is skipped
+// and plugins_tick / plugins_emit_* short-circuit so we can bisect
+// whether the plugin path is involved in a post-lock crash.
+std::atomic<bool>        g_disabled{false};
 std::mutex               g_event_mtx;
 std::vector<PluginEvent> g_event_queue;
 std::atomic<bool>        g_manager_visible{false};
@@ -101,6 +111,12 @@ struct Toast {
 std::mutex         g_toast_mtx;
 std::vector<Toast> g_toasts;
 std::chrono::steady_clock::time_point g_last_toast_tick{};
+
+// v0.5.3.2 (#5): bound the queues. If the overlay thread stalls while
+// the render thread keeps flooding events / toasts these would grow
+// without limit. Drop-oldest is fine — these are advisory UI events.
+constexpr std::size_t kMaxEventQueue = 256;
+constexpr std::size_t kMaxToasts     = 16;
 
 // === Store file path helper ===
 std::wstring store_path_for(const std::string& plugin_name) {
@@ -282,81 +298,11 @@ int api_player_has_target(lua_State* L) {
     return 1;
 }
 
-// === farever.foes API ===
-//
-// Each foe is returned as a Lua table with these fields:
-//   x, y, z, rot_z, dist, hp, max_hp, hp_pct, shield, level,
-//   in_combat (bool), has_target (bool), is_target (bool)
-//
-// `is_target` is set on the foe the local Hero is currently targeting
-// (handy for plugins that want to highlight the active boss). The
-// list is sorted nearest-first.
-
-void push_foe_table(lua_State* L, const FoeEntry& f, bool is_target) {
-    lua_newtable(L);
-    lua_pushnumber(L, f.x);          lua_setfield(L, -2, "x");
-    lua_pushnumber(L, f.y);          lua_setfield(L, -2, "y");
-    lua_pushnumber(L, f.z);          lua_setfield(L, -2, "z");
-    lua_pushnumber(L, f.rot_z);      lua_setfield(L, -2, "rot_z");
-    lua_pushnumber(L, f.dist);       lua_setfield(L, -2, "dist");
-    lua_pushnumber(L, f.hp);         lua_setfield(L, -2, "hp");
-    lua_pushnumber(L, f.max_hp);     lua_setfield(L, -2, "max_hp");
-    lua_pushnumber(L, f.hp_pct);     lua_setfield(L, -2, "hp_pct");
-    lua_pushnumber(L, f.shield);     lua_setfield(L, -2, "shield");
-    lua_pushinteger(L, f.level);     lua_setfield(L, -2, "level");
-    lua_pushboolean(L, f.in_combat); lua_setfield(L, -2, "in_combat");
-    lua_pushboolean(L, f.has_target);lua_setfield(L, -2, "has_target");
-    lua_pushboolean(L, is_target);   lua_setfield(L, -2, "is_target");
-}
-
-int api_foes_count(lua_State* L) {
-    FoesSnapshot s = foe_state_read();
-    lua_pushinteger(L, (lua_Integer)s.count);
-    return 1;
-}
-
-int api_foes_list(lua_State* L) {
-    FoesSnapshot s = foe_state_read();
-    lua_createtable(L, (int)s.count, 0);
-    for (std::size_t i = 0; i < s.count; ++i) {
-        bool is_tgt = (s.target_index == (int)i);
-        push_foe_table(L, s.foes[i], is_tgt);
-        lua_rawseti(L, -2, (lua_Integer)(i + 1));  // 1-based
-    }
-    return 1;
-}
-
-int api_foes_target(lua_State* L) {
-    FoesSnapshot s = foe_state_read();
-    if (s.target_index < 0 ||
-        s.target_index >= (int)s.count) {
-        lua_pushnil(L);
-        return 1;
-    }
-    push_foe_table(L, s.foes[s.target_index], true);
-    return 1;
-}
-
-int api_foes_nearest(lua_State* L) {
-    FoesSnapshot s = foe_state_read();
-    if (s.count == 0) { lua_pushnil(L); return 1; }
-    bool is_tgt = (s.target_index == 0);
-    push_foe_table(L, s.foes[0], is_tgt);
-    return 1;
-}
-
-int api_foes_in_combat(lua_State* L) {
-    // Count of currently in-combat foes — handy "are we in a fight"
-    // sanity check that does not depend on the player's own combat
-    // flag (which can lag for a beat after the last hit).
-    FoesSnapshot s = foe_state_read();
-    int n = 0;
-    for (std::size_t i = 0; i < s.count; ++i) {
-        if (s.foes[i].in_combat) ++n;
-    }
-    lua_pushinteger(L, n);
-    return 1;
-}
+// v0.5.3.1's farever.foes API (Phase C) was removed in v0.5.3.2 after
+// it was identified as the root cause of a post-lock crash. Foe
+// tracking will return in a later release once the read path is
+// rebuilt in isolation. Plugin authors who started using the API will
+// see it as nil and should branch accordingly.
 
 int api_dps_current(lua_State* L) {
     AggSnapshot s = aggregator_snapshot();
@@ -467,18 +413,43 @@ void store_save(lua_State* L, const std::string& plugin_name) {
     lua_pop(L, 1);  // pop store table
     out += "}\n";
 
-    std::wstring path = store_path_for(plugin_name);
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE,
+    // v0.5.3.2 (#4): atomic write — write to a .tmp file first, then
+    // MoveFileExW with MOVEFILE_REPLACE_EXISTING. CreateFile-with-
+    // CREATE_ALWAYS truncates the destination before the new bytes
+    // land, so a game crash mid-write previously left users with an
+    // empty store file and a wiped personal_best.
+    std::wstring final_path = store_path_for(plugin_name);
+    std::wstring tmp_path   = final_path + L".tmp";
+    HANDLE h = CreateFileW(tmp_path.c_str(), GENERIC_WRITE,
                            FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
-        logf("plugins: '%s' store save failed (CreateFile)",
+        logf("plugins: '%s' store save failed (CreateFile tmp)",
              plugin_name.c_str());
         return;
     }
     DWORD written = 0;
-    WriteFile(h, out.data(), (DWORD)out.size(), &written, nullptr);
+    BOOL  wrote_ok = WriteFile(h, out.data(), (DWORD)out.size(),
+                               &written, nullptr);
+    // Force the bytes to disk before the rename so a power loss
+    // between rename and flush can't leave the rename naming an empty
+    // file. FlushFileBuffers is cheap on SSDs.
+    if (wrote_ok) FlushFileBuffers(h);
     CloseHandle(h);
+    if (!wrote_ok || written != out.size()) {
+        logf("plugins: '%s' store save failed (Write %lu of %zu)",
+             plugin_name.c_str(),
+             (unsigned long)written, out.size());
+        DeleteFileW(tmp_path.c_str());
+        return;
+    }
+    if (!MoveFileExW(tmp_path.c_str(), final_path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        logf("plugins: '%s' store save failed (rename, GLE=%lu)",
+             plugin_name.c_str(),
+             (unsigned long)GetLastError());
+        DeleteFileW(tmp_path.c_str());
+    }
 }
 
 void store_load(lua_State* L, const std::string& plugin_name) {
@@ -587,6 +558,12 @@ int api_toast(lua_State* L) {
     t.total     = dur;
     std::lock_guard<std::mutex> lk(g_toast_mtx);
     g_toasts.push_back(std::move(t));
+    // v0.5.3.2 (#5): drop-oldest if a runaway plugin spams toast().
+    if (g_toasts.size() > kMaxToasts) {
+        g_toasts.erase(g_toasts.begin(),
+                       g_toasts.begin() +
+                       (g_toasts.size() - kMaxToasts));
+    }
     return 0;
 }
 
@@ -651,7 +628,10 @@ int api_imgui_progress(lua_State* L) {
 int api_imgui_input_text(lua_State* L) {
     const char* label = luaL_checkstring(L, 1);
     const char* cur   = luaL_optstring(L, 2, "");
-    char buf[256] = {0};
+    // v0.5.3.2 (#7): 1 KB buffer covers anything a sane plugin would
+    // ever type into a single field. Longer inputs still get cleanly
+    // truncated; no plugin should be storing essays in here.
+    char buf[1024] = {0};
     std::strncpy(buf, cur, sizeof(buf) - 1);
     bool changed = ImGui::InputText(label, buf, sizeof(buf));
     lua_pushstring(L, buf);
@@ -767,13 +747,8 @@ void install_api(lua_State* L) {
     lua_pushcfunction(L, api_dps_in_combat); lua_setfield(L, -2, "in_combat");
     lua_setfield(L, -2, "dps");
 
-    lua_newtable(L);  // farever.foes
-    lua_pushcfunction(L, api_foes_count);     lua_setfield(L, -2, "count");
-    lua_pushcfunction(L, api_foes_list);      lua_setfield(L, -2, "list");
-    lua_pushcfunction(L, api_foes_target);    lua_setfield(L, -2, "target");
-    lua_pushcfunction(L, api_foes_nearest);   lua_setfield(L, -2, "nearest");
-    lua_pushcfunction(L, api_foes_in_combat); lua_setfield(L, -2, "in_combat");
-    lua_setfield(L, -2, "foes");
+    // farever.foes table was here in v0.5.3.1. Removed in v0.5.3.2;
+    // see the comment by the (deleted) bindings above.
 
     lua_newtable(L);  // farever.log
     lua_pushcfunction(L, api_log_info); lua_setfield(L, -2, "info");
@@ -901,6 +876,8 @@ void scan_plugins_dir() {
         get_mtime(p.path, &p.mtime);
         load_plugin(p);
         g_plugins.push_back(std::move(p));
+        g_plugin_count.store((int)g_plugins.size(),
+                             std::memory_order_release);
     } while (FindNextFileW(h, &fd));
     FindClose(h);
 }
@@ -1064,7 +1041,15 @@ void run_render_hooks() {
 
 }  // namespace
 
+void plugins_set_disabled(bool disabled) {
+    g_disabled.store(disabled);
+}
+
 bool plugins_start() {
+    if (g_disabled.load()) {
+        logf("plugins: disabled by data/no_plugins.flag — skipping scan");
+        return true;
+    }
     // Create the plugins folder if it does not exist so users have a
     // clear place to drop files.
     std::wstring dir = plugins_dll_dir() + L"\\data\\plugins";
@@ -1075,6 +1060,7 @@ bool plugins_start() {
 }
 
 void plugins_tick() {
+    if (g_disabled.load()) return;
     auto now = std::chrono::steady_clock::now();
     double dt = 0.0;
     if (g_last_toast_tick.time_since_epoch().count() != 0) {
@@ -1093,42 +1079,52 @@ void plugins_stop() {
         if (p.L) { lua_close(p.L); p.L = nullptr; }
     }
     g_plugins.clear();
+    g_plugin_count.store(0, std::memory_order_release);
+}
+
+// v0.5.3.2 (#5 + #6): queue helper consolidates the cap-and-drop logic
+// and uses the atomic plugin count for the fast-path skip so the
+// render-thread emit doesn't race the overlay-thread vector mutation
+// during hot reload.
+static void enqueue_event(PluginEvent&& ev) {
+    if (g_plugin_count.load(std::memory_order_acquire) <= 0) return;
+    std::lock_guard<std::mutex> lk(g_event_mtx);
+    g_event_queue.push_back(std::move(ev));
+    if (g_event_queue.size() > kMaxEventQueue) {
+        g_event_queue.erase(
+            g_event_queue.begin(),
+            g_event_queue.begin() +
+            (g_event_queue.size() - kMaxEventQueue));
+    }
 }
 
 void plugins_emit_hero_locked() {
-    if (g_plugins.empty()) return;
     PluginEvent ev;
     ev.k = PluginEvent::Kind::HeroLocked;
-    std::lock_guard<std::mutex> lk(g_event_mtx);
-    g_event_queue.push_back(std::move(ev));
+    enqueue_event(std::move(ev));
 }
 
 void plugins_emit_damage_dealt(const char* skill_name, double amount,
                                bool is_crit, bool is_kill) {
-    if (g_plugins.empty()) return;
     PluginEvent ev;
     ev.k       = PluginEvent::Kind::DamageDealt;
     ev.skill   = skill_name ? skill_name : "";
     ev.amount  = amount;
     ev.is_crit = is_crit;
     ev.is_kill = is_kill;
-    std::lock_guard<std::mutex> lk(g_event_mtx);
-    g_event_queue.push_back(std::move(ev));
+    enqueue_event(std::move(ev));
 }
 
 void plugins_emit_fight_start(int fight_id) {
-    if (g_plugins.empty()) return;
     PluginEvent ev;
     ev.k        = PluginEvent::Kind::FightStart;
     ev.fight_id = fight_id;
-    std::lock_guard<std::mutex> lk(g_event_mtx);
-    g_event_queue.push_back(std::move(ev));
+    enqueue_event(std::move(ev));
 }
 
 void plugins_emit_fight_end(int fight_id, double duration_s,
                             double total_damage, double dps,
                             const char* top_skill) {
-    if (g_plugins.empty()) return;
     PluginEvent ev;
     ev.k         = PluginEvent::Kind::FightEnd;
     ev.fight_id  = fight_id;
@@ -1136,8 +1132,7 @@ void plugins_emit_fight_end(int fight_id, double duration_s,
     ev.amount    = total_damage;
     ev.dps       = dps;
     ev.top_skill = top_skill ? top_skill : "";
-    std::lock_guard<std::mutex> lk(g_event_mtx);
-    g_event_queue.push_back(std::move(ev));
+    enqueue_event(std::move(ev));
 }
 
 bool plugins_manager_visible() { return g_manager_visible.load(); }

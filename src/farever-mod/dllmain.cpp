@@ -16,15 +16,16 @@
 #include "hl_hook.h"
 #include "damage.h"
 #include "hero_state.h"
-#include "foe_state.h"
 #include "skill_resolve.h"
 #include "entity_state.h"
 #include "d3d12_hook.h"
 #include "overlay.h"
 #include "overlay_window.h"
+#include "plugins.h"
 
 #include <windows.h>
 #include <cstdio>
+#include <string>
 
 namespace fv = farever;
 
@@ -33,13 +34,21 @@ namespace {
 HMODULE   g_self = nullptr;
 fv::LibHL g_libhl{};
 
-// v0.5.2: kill-switch flag helpers removed. They were diagnostic
-// levers during the v0.4.13 → v0.5 bisection saga (no_overlay.flag,
-// no_hl_tick.flag, anticrash.flag, no_d3d12.flag) and the bisection
-// finished with the v0.5 architecture rewrite, so the flags are no
-// longer needed. The setter functions in overlay.cpp / hero_state.cpp
-// remain as no-op shims so a stray data/*.flag file from an old
-// install just gets ignored.
+// v0.5.3.3 diagnostic kill-switch helpers. Returns true if
+// data/<name> exists next to the loaded DLL. The flags themselves are
+// documented in foe_state.h / plugins.h.
+bool flag_file_present(const wchar_t* name) {
+    wchar_t path[MAX_PATH];
+    DWORD n = GetModuleFileNameW(g_self, path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return false;
+    std::wstring s(path);
+    auto pos = s.find_last_of(L'\\');
+    if (pos == std::wstring::npos) return false;
+    s.resize(pos);
+    s += L"\\data\\";
+    s += name;
+    return GetFileAttributesW(s.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
 
 DWORD WINAPI worker_thread(LPVOID) {
     fv::logf("worker: started");
@@ -48,13 +57,18 @@ DWORD WINAPI worker_thread(LPVOID) {
         fv::logf("worker: libhl resolution failed, aborting mod startup");
         return 1;
     }
+    // v0.5.3.2 diagnostic kill switch for plugins. Set BEFORE the
+    // module starts so the plugin scan can be skipped if needed.
+    if (flag_file_present(L"no_plugins.flag")) {
+        fv::logf("worker: no_plugins.flag found — plugins disabled");
+        fv::plugins_set_disabled(true);
+    }
     // Each module registers its own hl_alloc_obj watcher. Registration
     // must happen BEFORE hl_hook_install so we don't miss the first
     // burst of allocations on the way out of probe_init.
     fv::skill_resolve_init(g_libhl);
     fv::damage_start(g_libhl);
     fv::hero_state_start();
-    fv::foe_state_start();
 
     if (!fv::hl_hook_install(g_libhl)) {
         fv::logf("worker: hl_hook_install failed");
@@ -101,7 +115,6 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             // stop the render ticks so they don't keep firing into
             // freed state if the teardown takes longer than expected.
             fv::hero_state_stop();
-            fv::foe_state_stop();
             fv::damage_stop();
             // v0.5.1 (issue #18 audio choppy on quit): cleanly stop
             // the overlay-window render thread + free its D3D12 +

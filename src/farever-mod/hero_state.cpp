@@ -147,6 +147,13 @@ std::mutex                  g_pending_mu;
 std::vector<Pending>        g_pending;
 
 HeroSnapshot                g_snapshot{};
+// v0.5.3.2 (#2): guards g_snapshot against torn cross-thread reads.
+// HeroSnapshot is now ~480 bytes after Phase A/B expanded the
+// attribute surface; a plain memcpy from a different thread can mix
+// half-old / half-new fields. publish() (render thread) and
+// hero_state_read() (overlay thread, plugin getters) on
+// render thread) both take this lock.
+std::mutex                  g_snapshot_mu;
 
 // Plausible world-coordinate ranges (W1 spans ~6 tiles × 256 m).
 // Used to reject sync-proxy / template Heroes whose isMe is set but
@@ -287,11 +294,19 @@ std::uintptr_t try_relock_via_player() {
     return hero;
 }
 
+// v0.5.3.2 (#2): every g_snapshot mutation goes through this helper so
+// the lock acquisition is impossible to forget. Called from publish()
+// (5 call sites) and from hero_state_start.
+void publish_snapshot(const HeroSnapshot& s) {
+    std::lock_guard<std::mutex> lk(g_snapshot_mu);
+    g_snapshot = s;
+}
+
 void publish() {
     HeroSnapshot s{};
     std::uintptr_t a = g_locked_hero.load(std::memory_order_acquire);
     if (a == 0) {
-        g_snapshot = s;
+        publish_snapshot(s);
         return;
     }
     // v0.4.14 (E): type-tag check before dereferencing. Boehm GC reuses
@@ -314,7 +329,7 @@ void publish() {
             g_locked_hero.store(0);
             g_locked_player.store(0);
             g_unlocked_alloc_log_left.store(16);
-            g_snapshot = s;
+            publish_snapshot(s);
             return;
         }
     }
@@ -329,7 +344,7 @@ void publish() {
         g_locked_hero.store(0);
         g_locked_player.store(0);
         g_unlocked_alloc_log_left.store(16);
-        g_snapshot = s;
+        publish_snapshot(s);
         return;
     }
     // Drop locks that read NaN / inf — that's the signature of a
@@ -343,7 +358,7 @@ void publish() {
         g_locked_hero.store(0);
         g_locked_player.store(0);
         g_unlocked_alloc_log_left.store(16);
-        g_snapshot = s;
+        publish_snapshot(s);
         return;
     }
     s.locked = true;
@@ -409,34 +424,54 @@ void publish() {
                 s.heal                     = ua[UA_HEAL];
             }
 
-            // Hero-only second block. The attribute object's runtime
-            // type may be plain UnitAttributes (e.g. on Foes), in
-            // which case offsets 376+ are out of bounds. We can't
-            // tell just from the pointer, so we attempt the read and
-            // let mem_read_bytes' SEH guard fail it gracefully.
-            double ha[HA_COUNT]{};
-            if (mem_read_bytes(attr + OFF_HATTR_BLOCK_BASE, ha,
-                               OFF_HATTR_BLOCK_BYTES)) {
-                s.hero_attr_ok            = true;
-                s.poise                   = ha[HA_POISE];
-                s.poise_regen             = ha[HA_POISE_REGEN];
-                s.oxygen                  = ha[HA_OXYGEN];
-                s.rage                    = ha[HA_RAGE];
-                s.rage_regen              = ha[HA_RAGE_REGEN];
-                s.spark                   = ha[HA_SPARK];
-                s.spark_regen             = ha[HA_SPARK_REGEN];
-                s.combo_point             = ha[HA_COMBO_POINT];
-                s.focus                   = ha[HA_FOCUS];
-                s.damage_modifier         = ha[HA_DAMAGE_MODIFIER];
-                s.damage_taken_modifier   = ha[HA_DAMAGE_TAKEN_MODIFIER];
-                s.heal_given_multiplier   = ha[HA_HEAL_GIVEN_MULT];
-                s.shield_power_multiplier = ha[HA_SHIELD_POWER_MULT];
-                s.glide_speed             = ha[HA_GLIDE_SPEED];
+            // v0.5.3.2 (#1): only read the HeroAttributes-specific
+            // block (offsets 376..528) if the attr object's runtime
+            // type really IS ent.HeroAttributes. Before this check
+            // we relied on mem_read_bytes' SEH guard to gracefully
+            // fail when attr was a plain UnitAttributes (368 bytes
+            // total). But SEH only fires on an actual page fault —
+            // if the bytes past the end of a UnitAttributes happen
+            // to be allocated heap from a neighbouring object the
+            // read succeeds and writes garbage into the Hero
+            // resource fields. Compare attr's type tag against the
+            // cached hl_type for ent.HeroAttributes; only proceed
+            // if it matches.
+            static std::uintptr_t s_hattr_type = 0;
+            if (s_hattr_type == 0) {
+                s_hattr_type = hl_hook_get_type(L"ent.HeroAttributes");
+            }
+            std::uint64_t attr_type_u64 = 0;
+            bool is_hero_attr = false;
+            if (s_hattr_type &&
+                mem_read_u64(attr, &attr_type_u64) &&
+                static_cast<std::uintptr_t>(attr_type_u64) == s_hattr_type) {
+                is_hero_attr = true;
+            }
+            if (is_hero_attr) {
+                double ha[HA_COUNT]{};
+                if (mem_read_bytes(attr + OFF_HATTR_BLOCK_BASE, ha,
+                                   OFF_HATTR_BLOCK_BYTES)) {
+                    s.hero_attr_ok            = true;
+                    s.poise                   = ha[HA_POISE];
+                    s.poise_regen             = ha[HA_POISE_REGEN];
+                    s.oxygen                  = ha[HA_OXYGEN];
+                    s.rage                    = ha[HA_RAGE];
+                    s.rage_regen              = ha[HA_RAGE_REGEN];
+                    s.spark                   = ha[HA_SPARK];
+                    s.spark_regen             = ha[HA_SPARK_REGEN];
+                    s.combo_point             = ha[HA_COMBO_POINT];
+                    s.focus                   = ha[HA_FOCUS];
+                    s.damage_modifier         = ha[HA_DAMAGE_MODIFIER];
+                    s.damage_taken_modifier   = ha[HA_DAMAGE_TAKEN_MODIFIER];
+                    s.heal_given_multiplier   = ha[HA_HEAL_GIVEN_MULT];
+                    s.shield_power_multiplier = ha[HA_SHIELD_POWER_MULT];
+                    s.glide_speed             = ha[HA_GLIDE_SPEED];
+                }
             }
         }
     }
 
-    g_snapshot = s;
+    publish_snapshot(s);
 }
 
 }  // namespace
@@ -450,7 +485,10 @@ void hero_state_start() {
         std::lock_guard<std::mutex> lk(g_pending_mu);
         g_pending.clear();
     }
-    g_snapshot = HeroSnapshot{};
+    {
+        std::lock_guard<std::mutex> lk(g_snapshot_mu);
+        g_snapshot = HeroSnapshot{};
+    }
     hl_hook_register(L"ent.Hero", on_hero_alloc);
     logf("hero_state: watcher registered (render-thread tick)");
 }
@@ -707,7 +745,14 @@ void hero_state_tick() {
     }
 }
 
-HeroSnapshot hero_state_read() { return g_snapshot; }
+HeroSnapshot hero_state_read() {
+    // v0.5.3.2 (#2): guarded copy. Render thread writes via
+    // publish_snapshot; overlay-thread plugin getters read here.
+    // Without the lock the ~480-byte
+    // memcpy across threads can tear.
+    std::lock_guard<std::mutex> lk(g_snapshot_mu);
+    return g_snapshot;
+}
 
 std::uintptr_t hero_state_locked_ptr() {
     return g_locked_hero.load(std::memory_order_acquire);

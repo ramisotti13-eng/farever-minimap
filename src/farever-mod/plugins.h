@@ -56,4 +56,9 @@ void plugins_render_manager();
 bool plugins_manager_visible();
 void plugins_manager_toggle();
 
+// v0.5.3.3 diagnostic kill switch. When true, plugins_start does
+// nothing and plugins_tick / plugins_emit_* are no-ops. Set from
+// overlay startup if data/no_plugins.flag is present next to the DLL.
+void plugins_set_disabled(bool disabled);
+
 }  // namespace farever
