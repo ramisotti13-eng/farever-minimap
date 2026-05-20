@@ -137,6 +137,29 @@ farever.dps.total()                         -- current pull's total damage
 farever.dps.elapsed()                       -- seconds since the pull started
 farever.dps.in_combat()                     -- true while the pull is still active
 
+-- Current target (the foe or hero your character is engaging right now;
+-- driven by Hero.lockedTarget / autoTarget / target in that priority).
+-- All these return 0 / "" / false when nothing is targeted.
+farever.target.exists()                     -- true if a target is locked
+farever.target.name()                       -- internal kind id ("Boar_Z1W_E", ...)
+farever.target.x()                          -- world X
+farever.target.y()                          -- world Y
+farever.target.z()                          -- world Z
+farever.target.level()                      -- target's level
+farever.target.hp()                         -- current HP
+farever.target.max_hp()                     -- max HP
+farever.target.hp_pct()                     -- hp / max_hp, 0.0 .. 1.0
+
+-- Cast bar. is_casting is true while the target is in a non-auto skill
+-- (auto-attacks are filtered out). cast_total_sec is 0 the first time
+-- you see a given skill; the mod learns the duration from that cast
+-- and serves it back on every subsequent cast of the same skill.
+farever.target.is_casting()                 -- true while a real cast runs
+farever.target.cast_skill()                 -- skill id ("Boar_Skill1")
+farever.target.cast_elapsed_sec()           -- seconds since the cast started
+farever.target.cast_total_sec()             -- cached duration, 0 if unknown yet
+farever.target.cast_remaining_sec()         -- total - elapsed, 0 if unknown
+farever.target.cast_progress()              -- elapsed / total, 0.0 .. 1.0
 ```
 
 All of these are functions you call. They return the value at the
@@ -145,11 +168,13 @@ character yet (`locked()` returns false) the resource and defense
 readers return 0 so plugin code can use them unconditionally.
 
 > **Foes API note.** v0.5.3.1 shipped a `farever.foes.*` table for
-> tracking mobs and bosses. It was the source of a crash a few
-> seconds after the hero locks, so v0.5.3.2 pulled the whole thing
-> out. If you already wrote a plugin against it, the table is `nil`
-> now. A new foe-tracker is on the roadmap once the read path is
-> rebuilt in isolation.
+> tracking *every* mob in range. It was the source of a crash a few
+> seconds after the hero locks, so v0.5.3.2 pulled it out. A full
+> multi-foe tracker is still on the roadmap. The replacement that
+> ships now is `farever.target.*` (above): it tracks only your
+> currently-targeted foe, which covers the vast majority of
+> boss-helper / cast-warning use cases at a fraction of the read
+> surface and zero observed crashes.
 
 ## Events
 
@@ -177,6 +202,27 @@ function on_event(name, data)
         -- data.total_damage (float)
         -- data.dps          (float)
         -- data.top_skill    (string, highest-total skill of the fight)
+
+    elseif name == "target_changed" then
+        -- Fires whenever the player's auto / locked target switches.
+        -- data.kind is the new target's internal id string ("Boar_Z1W_E",
+        -- "Skunk_Z1W", ...). Empty string when the target is cleared.
+
+    elseif name == "cast_start" then
+        -- A boss / mob your hero is targeting has started a (non-auto)
+        -- skill. Use this to play a warning sound or pop a toast.
+        -- data.skill     (string, internal id like "Boar_Skill1")
+        -- data.total_sec (float, learned duration of this skill from
+        --                 a previous observation; 0.0 the very first
+        --                 time we see this skill)
+
+    elseif name == "cast_end" then
+        -- The cast finished (runningCtx cleared). The duration the mod
+        -- measured is also fed back into the duration cache so future
+        -- cast_start events for the same skill carry that value in
+        -- data.total_sec.
+        -- data.skill    (string)
+        -- data.duration (float, seconds)
     end
 end
 ```
@@ -260,6 +306,70 @@ times in quick succession, fades out near the end. Good for "new
 record" or "warning" messages where opening a whole window would be
 overkill.
 
+## Sounds
+
+```lua
+farever.sound("alert")    -- sharp ping (SystemAsterisk)
+farever.sound("warning")  -- lower ping (SystemExclamation)
+farever.sound("info")     -- soft notification ping
+farever.sound("beep")     -- generic beep
+```
+
+Plays a Windows system sound asynchronously. No audio files are
+bundled, the names just route to the system's existing event sounds
+so they always work regardless of mod install path. Useful in
+combination with `cast_start` for boss telegraph warnings:
+
+```lua
+function on_event(name, data)
+    if name == "cast_start" and data.skill == "Boar_Skill1" then
+        farever.sound("warning")
+    end
+end
+```
+
+If a player has the system sound muted, the call simply does
+nothing. There is no fallback PC beep on a muted system.
+
+## Boss-mechanic plugins
+
+The `target_changed` / `cast_start` / `cast_end` events plus
+`farever.target.*` are designed for boss-helper plugins: warn the
+player before a telegraphed skill lands, count phase transitions
+based on HP percentages, etc. Sketch:
+
+```lua
+-- Per-skill "dodge in" hard-coded offsets. The mod's
+-- cast_total_sec is the full skill window including recovery,
+-- so the actual impact moment is usually a bit earlier. Bosses
+-- you've fought a few times get their own line here.
+local IMPACT_AT = {
+    Boar_Skill1 = 2.0,
+}
+
+function on_event(name, data)
+    if name == "cast_start" then
+        local impact = IMPACT_AT[data.skill]
+        if impact then
+            farever.toast(string.format("%s incoming!", data.skill))
+            -- Schedule the warning in on_render via cast_elapsed_sec.
+        end
+    end
+end
+
+local warned = false
+function on_render()
+    if not farever.target.is_casting() then warned = false; return end
+    local skill   = farever.target.cast_skill()
+    local impact  = IMPACT_AT[skill]
+    local elapsed = farever.target.cast_elapsed_sec()
+    if impact and not warned and (impact - elapsed) <= 1.0 then
+        farever.sound("warning")
+        warned = true
+    end
+end
+```
+
 ## Logging
 
 ```lua
@@ -291,6 +401,8 @@ You cannot do these things from a plugin. This is on purpose:
 - Reach into the mod's globals via `debug` (also gone)
 - Read other players' positions (the mod itself never reads them)
 - Cast spells, click for the user, modify game memory
+- Play arbitrary audio files (only the four named system sounds in
+  `farever.sound()` work — no custom WAV / MP3 paths)
 
 If you find a real-world use case that needs one of these, open an
 issue. We can probably expose a safe wrapper for it.

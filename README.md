@@ -15,16 +15,20 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
   numbers the game itself shows above mobs, so other party members,
   ambient world damage and bleeds on you are out of the picture by
   construction.
-* **Plugin runtime** (new in 0.5.3): drop your own Lua scripts into
-  `data/plugins/` and the mod loads them sandboxed, with hot reload
-  on save. See [plugin authoring guide](data/plugins/README.md).
+* **Plugin runtime** (new in 0.5.3, expanded in 0.5.4): drop your own
+  Lua scripts into `data/plugins/` and the mod loads them sandboxed
+  with hot reload on save. As of 0.5.4 plugin authors can read
+  target identity, HP and the active cast bar, react to
+  `target_changed` / `cast_start` / `cast_end` events, and play
+  audible warnings, which is enough to build boss-helper plugins.
+  See [plugin authoring guide](data/plugins/README.md).
 
 ## Which release do I download?
 
 There are two parallel builds on the [Releases page](../../releases).
 Pick once and stick with it.
 
-* **[v0.5.3.2](../../releases/latest)** — the main, actively developed
+* **[v0.5.4](../../releases/latest)** — the main, actively developed
   build. Use this unless your machine cannot run it.
 * **[v0.4.15](../../releases/tag/v0.4.15)** — a frozen legacy build
   for users where v0.5.x cannot get the overlay up. This mostly hits
@@ -33,7 +37,7 @@ Pick once and stick with it.
   game's swap chain and avoids the DirectComposition path entirely,
   which dodges that whole class of problem.
 
-| Feature                              | v0.5.3.2                      | v0.4.15                              |
+| Feature                              | v0.5.4                        | v0.4.15                              |
 | ------------------------------------ | ----------------------------- | ------------------------------------ |
 | Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
 | Loot tracker window                  | Yes                           | No                                   |
@@ -43,7 +47,7 @@ Pick once and stick with it.
 | Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
 | Known long-session access violation  | No                            | Possible after long AFK DPS farming  |
 
-If v0.5.3.2 does not bring up the overlay on your machine, try v0.4.15
+If v0.5.4 does not bring up the overlay on your machine, try v0.4.15
 before opening an issue. If neither works, then open the issue and
 attach `farever-mod.log` from your Farever folder.
 
@@ -255,6 +259,21 @@ is the fastest way to narrow the cause.
   filter tablet (funnel button on the minimap bezel) and use the
   "UI scale (text)" slider, 2.0x to 2.5x is usually right for
   a 48 inch 4K display.
+
+## What's new in 0.5.4
+
+This one is for plugin authors. The mod itself behaves the same as 0.5.3.2 for everyone else. If you do not write plugins you can take or skip this release.
+
+What's new for plugin authors:
+
+* **`farever.target.*`**. Reads of the foe (or hero in PvP) your character is currently engaged with. 14 getters covering identity (`exists`, `name`, `level`), position (`x`, `y`, `z`), health (`hp`, `max_hp`, `hp_pct`) and the active cast (`is_casting`, `cast_skill`, `cast_progress`, `cast_total_sec`, `cast_remaining_sec`, `cast_elapsed_sec`). Hero.lockedTarget / autoTarget / target in priority, hxbit UID resolved through the network host, type-anchored, all safe to call every frame.
+* **Three new events**. `target_changed` fires when the auto / locked target switches, `cast_start` fires when the target begins a non-auto skill, `cast_end` fires when it finishes. `cast_start.data.total_sec` carries the cached duration from the previous cast of the same skill, so the second time you see a boss skill the progress bar is real.
+* **`farever.sound()`**. Plays a Windows system sound by name (`alert`, `warning`, `info`, `beep`). Asynchronous, respects the user's mute setting, no audio files bundled. Pair it with `cast_start` for telegraph warnings.
+* **Boss-helper sample**. [`examples/plugins/target_probe.lua`](examples/plugins/target_probe.lua) shows every piece of the new surface in one file: target identity, HP bar, cast bar with timer, cast-start toast and an audible ping one second before the cast lands.
+
+Single-target only for now. A full multi-foe scanner is still on the roadmap; the read path that crashed in 0.5.3.1 needs to be rebuilt in isolation first. The single-target surface covers the vast majority of boss-helper use cases at a fraction of the read surface.
+
+Plugin authoring guide at [`data/plugins/README.md`](data/plugins/README.md) is updated with the new APIs and a complete boss-helper plugin sketch.
 
 ## What's new in 0.5.3.2
 
