@@ -160,6 +160,38 @@ farever.target.cast_elapsed_sec()           -- seconds since the cast started
 farever.target.cast_total_sec()             -- cached duration, 0 if unknown yet
 farever.target.cast_remaining_sec()         -- total - elapsed, 0 if unknown
 farever.target.cast_progress()              -- elapsed / total, 0.0 .. 1.0
+
+-- Target defense (v0.5.5+). Reads return 0 for many builds because
+-- the inline UnitAttributes fields hold only the base values; the
+-- real final stats live in a MapData side-channel that the mod
+-- doesn't decode yet. Useful as a placeholder slot for plugins that
+-- want to switch over once the deeper read lands.
+farever.target.armor()
+farever.target.magic_armor()
+farever.target.magic_reduction()
+
+-- Equipped weapon (v0.5.6+). Hero.weaponInHand chase. The kind is
+-- the internal id ("Staff_Craft_C"); level / upgrade are integers.
+-- All three are empty / 0 mid-swap.
+farever.player.weapon_kind()                -- "Staff_Craft_C"
+farever.player.weapon_level()
+farever.player.weapon_upgrade()
+
+-- Full loadout (v0.5.6+). Walks Hero.loadout.equipment.content[].
+-- Each entry is a Lua table { kind, level, upgrade }. Order matches
+-- the game's content array; the mod refreshes the snapshot at ~1 Hz.
+local items = farever.player.equipment()
+for i, it in ipairs(items) do
+    print(i, it.kind, it.level, it.upgrade)
+end
+
+-- Active statuses / buffs (v0.5.6+). Walks Unit.instigatedStatuses.
+-- Each entry is { kind, duration, stacks }. Plugins compute remaining
+-- time client-side from farever.now() if they want a countdown.
+local buffs = farever.player.statuses()
+for i, s in ipairs(buffs) do
+    print(i, s.kind, s.duration, s.stacks)
+end
 ```
 
 All of these are functions you call. They return the value at the
@@ -223,6 +255,15 @@ function on_event(name, data)
         -- data.total_sec.
         -- data.skill    (string)
         -- data.duration (float, seconds)
+
+    elseif name == "weapon_changed" then
+        -- (v0.5.6+) Hero.weaponInHand transitioned to a new kind.
+        -- Also fires on the initial observation after hero lock with
+        -- prev_kind == "".
+        -- data.kind      (string, new weapon's internal id)
+        -- data.prev_kind (string, previous kind or "")
+        -- data.level     (int)
+        -- data.upgrade   (int)
     end
 end
 ```
@@ -266,6 +307,34 @@ imgui.same_line()
 If you do not store the returned values back into your locals, the
 widget will not remember what the user typed. This catches a lot of
 beginners.
+
+### Animation surface (v0.5.6+)
+
+For boss-mechanic alerts, telegraphs and other custom HUD elements,
+the mod also exposes raw drawing primitives plus a time source. All
+coordinates are absolute screen-space; pair `cursor_pos()` with
+`dummy(w, h)` to anchor draws relative to the flowing layout and to
+reserve the height so subsequent widgets do not overlap.
+
+```lua
+farever.now()                                      -- seconds (double, monotonic)
+imgui.font_scale(2.0)                              -- scale text in current window
+imgui.font_scale(1.0)                              -- reset before next widget
+local x, y = imgui.cursor_pos()                    -- absolute screen anchor
+imgui.dummy(width, height)                         -- reserve flow space
+
+-- All draw_* take r, g, b, a in 0..1; the last argument of stroke
+-- variants is the line thickness in pixels.
+imgui.draw_rect_filled(x1, y1, x2, y2, r, g, b, a)
+imgui.draw_rect(x1, y1, x2, y2, r, g, b, a, thickness)
+imgui.draw_circle_filled(x, y, radius, r, g, b, a)
+imgui.draw_circle(x, y, radius, r, g, b, a, thickness)
+imgui.draw_line(x1, y1, x2, y2, r, g, b, a, thickness)
+imgui.draw_text(x, y, r, g, b, a, "text at this exact screen pos")
+```
+
+A worked example with cast-bar, telegraph circle, blinking alert and
+pulsing font size is in [`examples/plugins/animation_demo.lua`](../../examples/plugins/animation_demo.lua).
 
 ## Persistent state
 
@@ -409,19 +478,26 @@ issue. We can probably expose a safe wrapper for it.
 
 ## Example plugins (optional download)
 
-The mod ships empty. Two examples live in the repo for you to grab
-if you want a starting point:
+The mod ships empty. Two folders in the repo host ready-to-use
+plugins for you to grab as starting points:
 
-[`examples/plugins/hello_world.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/hello_world.lua)
-shows the basics: render, button, log, event.
+### First-party reference plugins (`examples/plugins/`)
 
-[`examples/plugins/personal_best.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/personal_best.lua)
-is the most complete example. It listens for `fight_end`, tracks your
-best DPS across sessions in the store, and fires a toast when you set
-a new record.
+- [`hello_world.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/hello_world.lua) — render, button, log, event basics.
+- [`personal_best.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/personal_best.lua) — tracks your best DPS across sessions in the store, fires a toast on new records.
+- [`target_probe.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/target_probe.lua) — every piece of the `farever.target.*` boss-helper surface in one file.
+- [`api_inspector.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/api_inspector.lua) — living documentation of every read-surface getter. Drop it in to see what your character / target currently exposes.
+- [`damage_planner.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/damage_planner.lua) — in-game version of Aragon's PvE damage calculator, with two-build comparison sliders and per-weapon damage memory.
+- [`animation_demo.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/animation_demo.lua) — showcases the v0.5.6 animation surface (blinking text, pulsing size, custom cast bar, telegraph circle, big-red-alert pattern).
 
-Save either one into this folder, restart the game (or just wait a
-second for hot reload), and it shows up in the Plugin Manager.
+### Community submissions (`community-plugins/`)
+
+Plugins authored by users of the mod. See
+[`community-plugins/README.md`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/community-plugins/README.md)
+for the current list and the submission process.
+
+Save any of these into your `data/plugins/` folder, wait a second for
+hot reload, and it shows up in the Plugin Manager.
 
 ## When things break
 

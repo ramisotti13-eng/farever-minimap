@@ -161,19 +161,28 @@ right one much easier when several are stacked.
 ## Plugin runtime (v0.5.3+)
 
 Drop a `.lua` file into `data/plugins/` and the mod loads it
-automatically. The folder ships empty. Two example plugins live in
-the repo at [`examples/plugins/`](examples/plugins/) as opt-in
-downloads: a minimal "hello world" and a personal-best DPS tracker
-that listens for `fight_end` events and persists across sessions.
+automatically. The folder ships empty. Two folders in the repo host
+ready-to-use plugins:
+
+* [`examples/plugins/`](examples/plugins/) — first-party reference
+  plugins maintained with the mod (hello_world, personal_best,
+  target_probe boss-helper, damage_planner, api_inspector, animation
+  demo).
+* [`community-plugins/`](community-plugins/) — submissions from
+  users of the mod. Each file has the author's GitHub handle in its
+  filename and a header naming the source. See that folder's
+  README for the submission process.
 
 Plugins get sandboxed Lua 5.4. They can read your player position,
-DPS, in-combat flag and fight events. They can draw their own
-ImGui window with text, buttons, sliders, checkboxes, color
-pickers, combos and progress bars. They can show centered toast
-notifications and persist per-plugin state to disk. They cannot
-touch game memory, network, the filesystem outside their own
-state, or other plugins' state. A bad plugin only crashes itself,
-the mod keeps running.
+DPS, in-combat flag, fight events, the equipped weapon and the full
+loadout, plus the current target and its cast bar. They can draw
+their own ImGui window with text, buttons, sliders, checkboxes,
+color pickers, combos, progress bars, and (since v0.5.6) custom
+shapes for animated alerts and telegraphs. They can show centered
+toast notifications, play system sounds, and persist per-plugin
+state to disk. They cannot touch game memory, network, the
+filesystem outside their own state, or other plugins' state. A bad
+plugin only crashes itself; the mod keeps running.
 
 Full authoring guide is at
 [`data/plugins/README.md`](data/plugins/README.md) (also included
