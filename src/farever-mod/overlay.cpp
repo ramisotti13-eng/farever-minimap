@@ -20,6 +20,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -2634,8 +2635,92 @@ extern std::atomic<bool> g_diag_no_overlay;
 extern std::atomic<bool> g_diag_no_hl_tick;
 extern std::atomic<bool> g_diag_anticrash;
 
+// v0.5.6 cursor-park workaround. Farever toggles the system cursor
+// invisible whenever the player is in camera mode (ALT taps flip it).
+// When invisible the cursor still moves physically and can hover over
+// overlay widgets without the user knowing. Park it at the game
+// window center while invisible so the overlay stays untouched.
+//
+// We don't track ALT ourselves — the cursor's actual show/hide state
+// is the ground truth via GetCursorInfo(). That way we work regardless
+// of how the game decides to toggle cursor visibility (ALT, ESC menu,
+// inventory, etc.).
+//
+// Idempotent each frame; the ClipCursor call is cheap when the clip
+// rect hasn't changed. Conditions to clip:
+//   - game window is the foreground window
+//   - overlay is visible + hero locked (no point clipping otherwise)
+//   - clickthrough not on (user wants overlay click-through, cursor
+//     should be the game's responsibility)
+//   - system cursor is currently HIDDEN (game is in camera mode)
+static void overlay_park_cursor_tick() {
+    HWND game_hwnd = g_overlay.hwnd;
+    if (!game_hwnd) return;
+
+    static bool s_clip_active = false;
+
+    // Opt-in via data/cursor_park.flag. Defaults OFF because ClipCursor
+    // and SetCursorPos can interact with the game's wndproc in
+    // unpredictable ways. User enables it explicitly.
+    static int  s_flag_check_ticks = 0;
+    static bool s_enabled          = false;
+    if ((s_flag_check_ticks++ % 120) == 0) {
+        static std::wstring flag_path;
+        if (flag_path.empty()) {
+            flag_path = data_path(L"cursor_park.flag");
+        }
+        DWORD attr = GetFileAttributesW(flag_path.c_str());
+        s_enabled = (attr != INVALID_FILE_ATTRIBUTES);
+    }
+    if (!s_enabled) {
+        if (s_clip_active) {
+            ClipCursor(nullptr);
+            s_clip_active = false;
+        }
+        return;
+    }
+
+    bool fg_ok       = (GetForegroundWindow() == game_hwnd) &&
+                       !IsIconic(game_hwnd);
+    bool hero_locked = (hero_state_locked_ptr() != 0);
+    // Any of the overlay's primary windows visible counts as "user
+    // might hover an overlay widget"; cursor park only matters then.
+    bool any_overlay = g_minimap_visible.load(std::memory_order_acquire) ||
+                       g_dps_visible.load(std::memory_order_acquire)     ||
+                       plugins_manager_visible();
+    bool ct          = g_clickthrough.load(std::memory_order_acquire);
+
+    CURSORINFO ci{};
+    ci.cbSize = sizeof(ci);
+    bool cursor_visible = true;
+    if (GetCursorInfo(&ci)) {
+        cursor_visible = (ci.flags & CURSOR_SHOWING) != 0;
+    }
+
+    bool want_clip = fg_ok && hero_locked && any_overlay && !ct &&
+                     !cursor_visible;
+
+    if (want_clip && !s_clip_active) {
+        RECT rc;
+        if (GetClientRect(game_hwnd, &rc)) {
+            POINT center{ (rc.right  - rc.left) / 2,
+                          (rc.bottom - rc.top)  / 2 };
+            ClientToScreen(game_hwnd, &center);
+            // One-shot snap so the cursor leaves wherever it last was
+            // (potentially over an overlay widget).
+            SetCursorPos(center.x, center.y);
+            RECT clip{ center.x, center.y, center.x + 1, center.y + 1 };
+            if (ClipCursor(&clip)) s_clip_active = true;
+        }
+    } else if (!want_clip && s_clip_active) {
+        ClipCursor(nullptr);
+        s_clip_active = false;
+    }
+}
+
 void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0_4_16*/) {
     keybinds_maybe_reload();
+    overlay_park_cursor_tick();
 
     // Crash-diagnosis heartbeat. Logs every 600 frames so a post-crash
     // log shows the last frame the overlay submission completed for,
@@ -2840,7 +2925,37 @@ void overlay_render(IDXGISwapChain3* swap_chain, ID3D12CommandQueue* /*unused_v0
         if (s > 2.50f) s = 2.50f;
         ImGui::GetIO().FontGlobalScale = s;
     }
+
+    // v0.5.6 mouse-park (safe variant of the cursor-park workaround).
+    // When the OS cursor is hidden (game in camera mode after an ALT
+    // toggle), force ImGui's notion of the mouse to off-screen so no
+    // overlay widget receives invisible hovers. Doesn't touch the OS
+    // cursor at all -- when the game re-shows it, ImGui_ImplWin32 sees
+    // the next WM_MOUSEMOVE and the position updates normally.
+    //
+    // Modern ImGui queues input events and applies them inside
+    // NewFrame(), so we both queue an "off-screen" mouse-pos event
+    // (which the event pump will pick up next frame) AND overwrite
+    // io.MousePos directly after NewFrame so this frame's widget
+    // hover tests also see the off-screen position.
+    bool s_mouse_park_hide_this_frame = false;
+    if (!g_clickthrough.load(std::memory_order_acquire)) {
+        CURSORINFO ci{};
+        ci.cbSize = sizeof(ci);
+        if (GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING) == 0) {
+            s_mouse_park_hide_this_frame = true;
+            ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+        }
+    }
+
     ImGui::NewFrame();
+
+    if (s_mouse_park_hide_this_frame) {
+        // NewFrame applied any queued events; clobber the resolved
+        // position too so widgets that check IsMouseHoveringRect or
+        // IsItemHovered this frame see "no mouse".
+        ImGui::GetIO().MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+    }
 
     // v0.5.2 issue #11: reset-positions hotkey. SetWindowPos by name
     // works on the stored ImGui window state regardless of whether
@@ -3133,6 +3248,10 @@ void overlay_after_resize(IDXGISwapChain3* swap_chain) {
 
 void overlay_shutdown() {
     if (!g_overlay.initialized && !g_overlay.init_failed) return;
+
+    // Release any cursor clip we set as part of the cursor-park
+    // workaround. Cheap when no clip was active.
+    ClipCursor(nullptr);
 
     if (g_overlay.orig_wndproc && g_overlay.hwnd) {
         SetWindowLongPtrW(g_overlay.hwnd, GWLP_WNDPROC,

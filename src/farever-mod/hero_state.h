@@ -1,8 +1,32 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace farever {
+
+// One slot in Hero.loadout.equipment. kind is the internal id string
+// (e.g. "Helmet_Bronze_A"); level and upgrade come from the item
+// object's level / upgradeLevel fields. Equipment slots are not
+// labelled with their semantic position (helmet vs ring vs etc.) at
+// this layer; the order matches the game's content array.
+struct EquippedItem {
+    std::string kind;
+    int         level   = 0;
+    int         upgrade = 0;
+};
+
+// One active status (buff or debuff) on the hero. kind is the internal
+// id ("Bleed", "ManaSurge", ...). duration is the total in seconds
+// (from the status' duration field). stacks is the current stack count.
+// All read from st.skill.Status; ordered as the game's instigatedStatuses
+// array exposes them.
+struct ActiveStatus {
+    std::string kind;
+    double      duration = 0.0;
+    int         stacks   = 0;
+};
 
 // Snapshot of the local Hero used by the minimap render and the plugin
 // API. Numeric attributes come from Hero.attr (HeroAttributes /
@@ -74,6 +98,32 @@ struct HeroSnapshot {
     double heal_given_multiplier;
     double shield_power_multiplier;
     double glide_speed;
+
+    // Equipped weapon. Chased from Hero.weaponInHand @ 1304 each frame.
+    // weapon_ok is true when the pointer + kind String read succeed.
+    // weapon_kind is the internal id (e.g. "Staff_Craft_C"). Level /
+    // upgrade are the live integer values. Plugins can use these to
+    // partition state by weapon (per-weapon personal bests, etc.) or
+    // to fire their own logic on weapon change. The kind change itself
+    // is also surfaced as a `weapon_changed` event.
+    bool        weapon_ok;
+    std::string weapon_kind;
+    int         weapon_level;
+    int         weapon_upgrade;
+
+    // Full loadout (everything other than the weapon-in-hand). Walked
+    // from Hero.loadout @ 1192 -> Loadout.equipment @ 96 ->
+    // Equipment.content @ 96 (ArrayObj). Empty when the chain hasn't
+    // resolved yet (mid-spawn, transition). Capped to a sane size to
+    // bound the per-frame cost. Order matches the game's content array.
+    std::vector<EquippedItem> equipment;
+
+    // Active statuses (buffs / debuffs) on the hero. Walked from
+    // ent.Unit.instigatedStatuses. Each entry carries the status kind
+    // string ("Bleed", "ManaSurge"), total duration in seconds, and
+    // current stack count. Plugins compute remaining time client-side
+    // from startTime + duration - now if they need a count-down.
+    std::vector<ActiveStatus> statuses;
 };
 
 // Register the ent.Hero alloc-hook watcher. The watcher pushes raw

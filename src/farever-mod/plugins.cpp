@@ -70,16 +70,20 @@ struct Plugin {
 
 struct PluginEvent {
     enum class Kind { HeroLocked, DamageDealt, FightStart, FightEnd,
-                      TargetChanged, CastStart, CastEnd };
+                      TargetChanged, CastStart, CastEnd, WeaponChanged };
     Kind        k = Kind::HeroLocked;
     std::string skill;
     std::string top_skill;
     std::string target_kind;
+    std::string weapon_kind;
+    std::string prev_weapon_kind;
     double      amount   = 0.0;
     double      duration = 0.0;
     double      dps      = 0.0;
     double      total_sec = 0.0;
     int         fight_id = 0;
+    int         weapon_level   = 0;
+    int         weapon_upgrade = 0;
     bool        is_crit  = false;
     bool        is_kill  = false;
 };
@@ -303,6 +307,68 @@ int api_player_has_target(lua_State* L) {
     return 1;
 }
 
+// Equipped weapon getters. Empty string / 0 when no weapon is equipped
+// (e.g. mid-swap) or the read chain failed this frame.
+int api_player_weapon_kind(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    if (h.weapon_ok) {
+        lua_pushlstring(L, h.weapon_kind.data(), h.weapon_kind.size());
+    } else {
+        lua_pushstring(L, "");
+    }
+    return 1;
+}
+int api_player_weapon_level(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    lua_pushinteger(L, h.weapon_ok ? h.weapon_level : 0);
+    return 1;
+}
+int api_player_weapon_upgrade(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    lua_pushinteger(L, h.weapon_ok ? h.weapon_upgrade : 0);
+    return 1;
+}
+
+// Full equipped loadout as a Lua array of tables:
+//   {{ kind="Helmet_X", level=1, upgrade=0 }, ...}
+// Order matches the game's content array; empty when not yet read.
+int api_player_equipment(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    lua_createtable(L, (int)h.equipment.size(), 0);
+    for (std::size_t i = 0; i < h.equipment.size(); ++i) {
+        const auto& it = h.equipment[i];
+        lua_createtable(L, 0, 3);
+        lua_pushlstring(L, it.kind.data(), it.kind.size());
+        lua_setfield(L, -2, "kind");
+        lua_pushinteger(L, it.level);
+        lua_setfield(L, -2, "level");
+        lua_pushinteger(L, it.upgrade);
+        lua_setfield(L, -2, "upgrade");
+        lua_rawseti(L, -2, (int)(i + 1));    // 1-based Lua array
+    }
+    return 1;
+}
+
+// Active statuses (buffs / debuffs) as a Lua array of tables:
+//   {{ kind="Bleed", duration=12.0, stacks=3 }, ...}
+// Plugins compute remaining time client-side if they want a countdown.
+int api_player_statuses(lua_State* L) {
+    HeroSnapshot h = hero_state_read();
+    lua_createtable(L, (int)h.statuses.size(), 0);
+    for (std::size_t i = 0; i < h.statuses.size(); ++i) {
+        const auto& s = h.statuses[i];
+        lua_createtable(L, 0, 3);
+        lua_pushlstring(L, s.kind.data(), s.kind.size());
+        lua_setfield(L, -2, "kind");
+        lua_pushnumber(L, s.duration);
+        lua_setfield(L, -2, "duration");
+        lua_pushinteger(L, s.stacks);
+        lua_setfield(L, -2, "stacks");
+        lua_rawseti(L, -2, (int)(i + 1));
+    }
+    return 1;
+}
+
 // v0.5.3.1's farever.foes API (Phase C) was removed in v0.5.3.2 after
 // it was identified as the root cause of a post-lock crash. Foe
 // tracking will return in a later release once the read path is
@@ -360,6 +426,25 @@ int api_target_hp_pct(lua_State* L) {
         pct = t.health / t.max_health;
     }
     lua_pushnumber(L, pct);
+    return 1;
+}
+
+// Slice 4 (damage planner): target defense surface. Returns 0 when no
+// target or attr chase hasn't completed; plugins should gate on exists()
+// + attr_ok via hp() != 0 just like the other attribute getters.
+int api_target_armor(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.attr_ok) ? t.armor : 0.0);
+    return 1;
+}
+int api_target_magic_armor(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.attr_ok) ? t.magic_armor : 0.0);
+    return 1;
+}
+int api_target_magic_reduction(lua_State* L) {
+    TargetSnapshot t = target_state_read();
+    lua_pushnumber(L, (t.exists && t.attr_ok) ? t.magic_reduction : 0.0);
     return 1;
 }
 
@@ -805,6 +890,164 @@ int api_imgui_drag_float(lua_State* L) {
     return 2;
 }
 
+// ---------- v0.5.6 animation surface ----------------------------------
+//
+// Time helper: monotonic seconds since plugin runtime startup. Use it
+// to drive sin/cos pulses or remaining-time count-downs. Same source
+// across all plugins so animations stay in phase.
+std::chrono::steady_clock::time_point g_plugin_start_time =
+    std::chrono::steady_clock::now();
+
+int api_farever_now(lua_State* L) {
+    auto now = std::chrono::steady_clock::now();
+    auto us  = std::chrono::duration_cast<std::chrono::microseconds>(
+                   now - g_plugin_start_time).count();
+    lua_pushnumber(L, (double)us / 1e6);
+    return 1;
+}
+
+// Font scale in the CURRENT window. Resets to 1.0 each frame? No: it
+// persists until SetWindowFontScale is called again. Plugin authors
+// should reset to 1.0 after their scaled draws to avoid leaking the
+// scale into widgets that come after.
+int api_imgui_font_scale(lua_State* L) {
+    float s = (float)luaL_checknumber(L, 1);
+    if (s < 0.1f) s = 0.1f;
+    if (s > 10.0f) s = 10.0f;
+    ImGui::SetWindowFontScale(s);
+    return 0;
+}
+
+// Returns the absolute screen-space cursor position (where the next
+// widget would draw). Use as anchor for the draw_* primitives.
+int api_imgui_cursor_pos(lua_State* L) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    lua_pushnumber(L, p.x);
+    lua_pushnumber(L, p.y);
+    return 2;
+}
+
+// Reserves a w x h block in the current window's flow without drawing
+// anything. Needed when a plugin draws custom shapes via draw_* and
+// wants ImGui to leave that vertical space for subsequent widgets.
+int api_imgui_dummy(lua_State* L) {
+    float w = (float)luaL_checknumber(L, 1);
+    float h = (float)luaL_checknumber(L, 2);
+    ImGui::Dummy(ImVec2(w, h));
+    return 0;
+}
+
+// Pack 4 floats [0..1] into an ImGui ABGR color (the format DrawList
+// wants). Clamps to [0..1] then maps to [0..255].
+static ImU32 lua_to_col4(lua_State* L, int r_arg) {
+    auto clamp01 = [](double v) {
+        if (v < 0.0) return 0.0;
+        if (v > 1.0) return 1.0;
+        return v;
+    };
+    double r = clamp01(luaL_checknumber(L, r_arg));
+    double g = clamp01(luaL_checknumber(L, r_arg + 1));
+    double b = clamp01(luaL_checknumber(L, r_arg + 2));
+    double a = clamp01(luaL_optnumber(L, r_arg + 3, 1.0));
+    return IM_COL32(
+        (int)(r * 255.0 + 0.5),
+        (int)(g * 255.0 + 0.5),
+        (int)(b * 255.0 + 0.5),
+        (int)(a * 255.0 + 0.5));
+}
+
+int api_imgui_draw_rect_filled(lua_State* L) {
+    float x1 = (float)luaL_checknumber(L, 1);
+    float y1 = (float)luaL_checknumber(L, 2);
+    float x2 = (float)luaL_checknumber(L, 3);
+    float y2 = (float)luaL_checknumber(L, 4);
+    ImU32 col = lua_to_col4(L, 5);
+    ImGui::GetWindowDrawList()->AddRectFilled({x1, y1}, {x2, y2}, col);
+    return 0;
+}
+
+int api_imgui_draw_rect(lua_State* L) {
+    float x1 = (float)luaL_checknumber(L, 1);
+    float y1 = (float)luaL_checknumber(L, 2);
+    float x2 = (float)luaL_checknumber(L, 3);
+    float y2 = (float)luaL_checknumber(L, 4);
+    ImU32 col = lua_to_col4(L, 5);
+    float thickness = (float)luaL_optnumber(L, 9, 1.0);
+    ImGui::GetWindowDrawList()->AddRect({x1, y1}, {x2, y2}, col,
+                                        0.0f, 0, thickness);
+    return 0;
+}
+
+int api_imgui_draw_circle_filled(lua_State* L) {
+    float x      = (float)luaL_checknumber(L, 1);
+    float y      = (float)luaL_checknumber(L, 2);
+    float radius = (float)luaL_checknumber(L, 3);
+    ImU32 col    = lua_to_col4(L, 4);
+    int segments = (int)luaL_optinteger(L, 8, 32);
+    ImGui::GetWindowDrawList()->AddCircleFilled({x, y}, radius, col,
+                                                segments);
+    return 0;
+}
+
+int api_imgui_draw_circle(lua_State* L) {
+    float x      = (float)luaL_checknumber(L, 1);
+    float y      = (float)luaL_checknumber(L, 2);
+    float radius = (float)luaL_checknumber(L, 3);
+    ImU32 col    = lua_to_col4(L, 4);
+    float thickness = (float)luaL_optnumber(L, 8, 1.0);
+    int segments    = (int)luaL_optinteger(L, 9, 32);
+    ImGui::GetWindowDrawList()->AddCircle({x, y}, radius, col,
+                                          segments, thickness);
+    return 0;
+}
+
+int api_imgui_draw_line(lua_State* L) {
+    float x1 = (float)luaL_checknumber(L, 1);
+    float y1 = (float)luaL_checknumber(L, 2);
+    float x2 = (float)luaL_checknumber(L, 3);
+    float y2 = (float)luaL_checknumber(L, 4);
+    ImU32 col = lua_to_col4(L, 5);
+    float thickness = (float)luaL_optnumber(L, 9, 1.0);
+    ImGui::GetWindowDrawList()->AddLine({x1, y1}, {x2, y2}, col, thickness);
+    return 0;
+}
+
+int api_imgui_draw_text(lua_State* L) {
+    float x = (float)luaL_checknumber(L, 1);
+    float y = (float)luaL_checknumber(L, 2);
+    ImU32 col = lua_to_col4(L, 3);
+    const char* s = luaL_checkstring(L, 7);
+    ImGui::GetWindowDrawList()->AddText({x, y}, col, s);
+    return 0;
+}
+
+int api_imgui_draw_triangle_filled(lua_State* L) {
+    float x1 = (float)luaL_checknumber(L, 1);
+    float y1 = (float)luaL_checknumber(L, 2);
+    float x2 = (float)luaL_checknumber(L, 3);
+    float y2 = (float)luaL_checknumber(L, 4);
+    float x3 = (float)luaL_checknumber(L, 5);
+    float y3 = (float)luaL_checknumber(L, 6);
+    ImU32 col = lua_to_col4(L, 7);
+    ImGui::GetWindowDrawList()->AddTriangleFilled(
+        {x1, y1}, {x2, y2}, {x3, y3}, col);
+    return 0;
+}
+
+int api_imgui_draw_triangle(lua_State* L) {
+    float x1 = (float)luaL_checknumber(L, 1);
+    float y1 = (float)luaL_checknumber(L, 2);
+    float x2 = (float)luaL_checknumber(L, 3);
+    float y2 = (float)luaL_checknumber(L, 4);
+    float x3 = (float)luaL_checknumber(L, 5);
+    float y3 = (float)luaL_checknumber(L, 6);
+    ImU32 col = lua_to_col4(L, 7);
+    float thickness = (float)luaL_optnumber(L, 11, 1.0);
+    ImGui::GetWindowDrawList()->AddTriangle(
+        {x1, y1}, {x2, y2}, {x3, y3}, col, thickness);
+    return 0;
+}
+
 void install_api(lua_State* L) {
     lua_newtable(L);  // farever
 
@@ -819,6 +1062,12 @@ void install_api(lua_State* L) {
     lua_pushcfunction(L, api_player_rot); lua_setfield(L, -2, "rot_z");
     BIND(locked); BIND(in_combat); BIND(has_target);
     BIND(level); BIND(combat_start);
+
+    // Equipped weapon (Hero.weaponInHand chase)
+    BIND(weapon_kind); BIND(weapon_level); BIND(weapon_upgrade);
+
+    // Full loadout + active statuses (Lua array returns)
+    BIND(equipment); BIND(statuses);
 
     // Health and energy
     BIND(health); BIND(max_health); BIND(health_pct); BIND(health_regen);
@@ -875,6 +1124,9 @@ void install_api(lua_State* L) {
     lua_pushcfunction(L, api_target_hp);      lua_setfield(L, -2, "hp");
     lua_pushcfunction(L, api_target_max_hp);  lua_setfield(L, -2, "max_hp");
     lua_pushcfunction(L, api_target_hp_pct);  lua_setfield(L, -2, "hp_pct");
+    lua_pushcfunction(L, api_target_armor);           lua_setfield(L, -2, "armor");
+    lua_pushcfunction(L, api_target_magic_armor);     lua_setfield(L, -2, "magic_armor");
+    lua_pushcfunction(L, api_target_magic_reduction); lua_setfield(L, -2, "magic_reduction");
     lua_pushcfunction(L, api_target_is_casting);
     lua_setfield(L, -2, "is_casting");
     lua_pushcfunction(L, api_target_cast_skill);
@@ -901,6 +1153,7 @@ void install_api(lua_State* L) {
 
     lua_pushcfunction(L, api_toast); lua_setfield(L, -2, "toast");
     lua_pushcfunction(L, api_sound); lua_setfield(L, -2, "sound");
+    lua_pushcfunction(L, api_farever_now); lua_setfield(L, -2, "now");
 
     lua_setglobal(L, "farever");
 
@@ -918,6 +1171,18 @@ void install_api(lua_State* L) {
     lua_pushcfunction(L, api_imgui_combo);        lua_setfield(L, -2, "combo");
     lua_pushcfunction(L, api_imgui_color_edit);   lua_setfield(L, -2, "color_edit");
     lua_pushcfunction(L, api_imgui_drag_float);   lua_setfield(L, -2, "drag_float");
+    // v0.5.6 animation surface
+    lua_pushcfunction(L, api_imgui_font_scale);         lua_setfield(L, -2, "font_scale");
+    lua_pushcfunction(L, api_imgui_cursor_pos);         lua_setfield(L, -2, "cursor_pos");
+    lua_pushcfunction(L, api_imgui_dummy);              lua_setfield(L, -2, "dummy");
+    lua_pushcfunction(L, api_imgui_draw_rect_filled);   lua_setfield(L, -2, "draw_rect_filled");
+    lua_pushcfunction(L, api_imgui_draw_rect);          lua_setfield(L, -2, "draw_rect");
+    lua_pushcfunction(L, api_imgui_draw_circle_filled); lua_setfield(L, -2, "draw_circle_filled");
+    lua_pushcfunction(L, api_imgui_draw_circle);        lua_setfield(L, -2, "draw_circle");
+    lua_pushcfunction(L, api_imgui_draw_line);             lua_setfield(L, -2, "draw_line");
+    lua_pushcfunction(L, api_imgui_draw_text);             lua_setfield(L, -2, "draw_text");
+    lua_pushcfunction(L, api_imgui_draw_triangle);         lua_setfield(L, -2, "draw_triangle");
+    lua_pushcfunction(L, api_imgui_draw_triangle_filled);  lua_setfield(L, -2, "draw_triangle_filled");
     lua_setglobal(L, "imgui");
 }
 
@@ -1075,6 +1340,16 @@ void push_event_table(lua_State* L, const PluginEvent& ev) {
             lua_pushnumber(L, ev.duration);
             lua_setfield(L, -2, "duration");
             break;
+        case PluginEvent::Kind::WeaponChanged:
+            lua_pushstring(L, ev.weapon_kind.c_str());
+            lua_setfield(L, -2, "kind");
+            lua_pushstring(L, ev.prev_weapon_kind.c_str());
+            lua_setfield(L, -2, "prev_kind");
+            lua_pushinteger(L, ev.weapon_level);
+            lua_setfield(L, -2, "level");
+            lua_pushinteger(L, ev.weapon_upgrade);
+            lua_setfield(L, -2, "upgrade");
+            break;
     }
 }
 
@@ -1087,6 +1362,7 @@ const char* event_name(PluginEvent::Kind k) {
         case PluginEvent::Kind::TargetChanged: return "target_changed";
         case PluginEvent::Kind::CastStart:     return "cast_start";
         case PluginEvent::Kind::CastEnd:       return "cast_end";
+        case PluginEvent::Kind::WeaponChanged: return "weapon_changed";
     }
     return "?";
 }
@@ -1314,6 +1590,17 @@ void plugins_emit_cast_end(const char* skill, double duration_sec) {
     ev.k        = PluginEvent::Kind::CastEnd;
     ev.skill    = skill ? skill : "";
     ev.duration = duration_sec;
+    enqueue_event(std::move(ev));
+}
+
+void plugins_emit_weapon_changed(const char* kind, const char* prev_kind,
+                                 int level, int upgrade) {
+    PluginEvent ev;
+    ev.k                = PluginEvent::Kind::WeaponChanged;
+    ev.weapon_kind      = kind      ? kind      : "";
+    ev.prev_weapon_kind = prev_kind ? prev_kind : "";
+    ev.weapon_level     = level;
+    ev.weapon_upgrade   = upgrade;
     enqueue_event(std::move(ev));
 }
 

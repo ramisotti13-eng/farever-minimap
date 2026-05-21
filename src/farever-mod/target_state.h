@@ -26,6 +26,12 @@ struct TargetSnapshot {
     bool        attr_ok;         // chased to Unit.attr successfully
     double      health;
     double      max_health;
+    // Slice 4 (v0.5.6 damage planner): target's defense surface.
+    // UnitAttributes.armor @ idx 21 (offset 216 -> idx (216-48)/8=21),
+    // magic_armor @ idx 22 (224), magic_reduction @ idx 23 (232).
+    double      armor;
+    double      magic_armor;
+    double      magic_reduction;
 
     // Slice 3: active-skill cast. is_casting is true while the
     // target has a non-null runningCtx on a non-auto-attack skill.

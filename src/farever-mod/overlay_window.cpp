@@ -679,16 +679,71 @@ void render_thread_main() {
         // principle invalidate the composition tree; re-rooting at
         // every lock edge is a cheap self-heal).
         bool hero_locked_now = (hero_state_locked_ptr() != 0);
+
+        // v0.5.6 alt-tab crash workaround. Game-side DX12Driver.present
+        // has been crashing on a few setups after long foreground
+        // losses (e.g. alt-tab to Discord for >5 s, then return). The
+        // crash signature is consistent: fg-skip counter spikes high
+        // then the game's renderer AVs. Hypothesis is that having our
+        // DCOMP visual attached to the game's HWND while the game's
+        // DXGI surface is in occluded/background state contributes to
+        // some bad interaction on restore.
+        //
+        // Workaround: when the game window has lost the foreground
+        // for ~0.5 s, detach our DCOMP visual entirely (SetContent
+        // null + Commit). On foreground restore, reattach. This
+        // takes our layer out of DWM's compositing pipeline while
+        // the game is in the background, reducing DXGI pressure on
+        // the game's swap chain during the restore.
+        // Opt-in via data/fg_detach.flag. Defaults OFF because the
+        // visual detach/reattach is itself a DCOMP operation that can
+        // interact with the game's surface state in unpredictable ways.
+        // Users hit by alt-tab AVs can enable it; everyone else gets
+        // the pre-v0.5.6 behaviour where the visual stays attached.
+        static int  s_fg_flag_ticks = 0;
+        static bool s_fg_workaround = false;
+        if ((s_fg_flag_ticks++ % 120) == 0) {
+            wchar_t dll_path[MAX_PATH] = L"";
+            GetModuleFileNameW(g_win.self_module, dll_path, MAX_PATH);
+            std::wstring flag_path(dll_path);
+            auto slash = flag_path.find_last_of(L"\\/");
+            if (slash != std::wstring::npos) flag_path.resize(slash);
+            flag_path += L"\\data\\fg_detach.flag";
+            DWORD attr = GetFileAttributesW(flag_path.c_str());
+            s_fg_workaround = (attr != INVALID_FILE_ATTRIBUTES);
+        }
+
+        bool fg_ok = true;
+        if (s_fg_workaround && g_win.game_hwnd) {
+            if (IsIconic(g_win.game_hwnd)) {
+                fg_ok = false;
+            } else {
+                HWND fg = GetForegroundWindow();
+                if (fg && fg != g_win.game_hwnd) fg_ok = false;
+            }
+        }
+        static int  s_fg_lost_frames    = 0;
+        static bool s_fg_detached       = false;
+        constexpr int kFgLostDetachAt = 30;     // ~0.5 s at 60 Hz
+        if (fg_ok) {
+            s_fg_lost_frames = 0;
+        } else {
+            if (s_fg_lost_frames < kFgLostDetachAt + 1) s_fg_lost_frames++;
+        }
+
+        bool want_attached = hero_locked_now &&
+                             g_win.visible.load() &&
+                             fg_ok;
+
+        // Initial-lock attach (and lock-loss detach) still go through
+        // the edge-detection so the log line fires once per transition.
         if (hero_locked_now != was_hero_locked &&
             g_win.dcomp_visual && g_win.dcomp_device) {
             g_win.dcomp_visual->SetContent(
-                hero_locked_now && g_win.visible.load()
+                want_attached
                     ? static_cast<IUnknown*>(g_win.swap_chain)
                     : nullptr);
             if (hero_locked_now && g_win.dcomp_target) {
-                // Defensive re-root in case the dungeon-entry zone
-                // transition tore down the composition target's
-                // child list. Cheap and idempotent.
                 g_win.dcomp_target->SetRoot(g_win.dcomp_visual);
             }
             g_win.dcomp_device->Commit();
@@ -697,9 +752,38 @@ void render_thread_main() {
                  hero_locked_now ? "acquired" : "lost",
                  hero_locked_now ? "(re-)attached" : "detached");
             was_hero_locked = hero_locked_now;
+            s_fg_detached = !want_attached;
         }
 
-        if (g_win.visible.load() && hero_locked_now) {
+        // Foreground-driven detach / attach. Independent of the
+        // hero-lock edge above so alt-tab during a stable lock still
+        // triggers it. Gated on g_win.ready so we don't touch DCOMP
+        // during early startup before the visual is even mounted.
+        if (g_win.ready.load(std::memory_order_acquire) &&
+            g_win.dcomp_visual && g_win.dcomp_device) {
+            if (!fg_ok && s_fg_lost_frames >= kFgLostDetachAt &&
+                !s_fg_detached && hero_locked_now) {
+                g_win.dcomp_visual->SetContent(nullptr);
+                g_win.dcomp_device->Commit();
+                overlay_set_wants_real_input(false);
+                s_fg_detached = true;
+                logf("overlay_window: foreground lost >%d frames, "
+                     "detached DCOMP visual (alt-tab crash workaround)",
+                     kFgLostDetachAt);
+            } else if (fg_ok && s_fg_detached && want_attached) {
+                g_win.dcomp_visual->SetContent(
+                    static_cast<IUnknown*>(g_win.swap_chain));
+                if (g_win.dcomp_target) {
+                    g_win.dcomp_target->SetRoot(g_win.dcomp_visual);
+                }
+                g_win.dcomp_device->Commit();
+                s_fg_detached = false;
+                logf("overlay_window: foreground restored, "
+                     "re-attached DCOMP visual");
+            }
+        }
+
+        if (g_win.visible.load() && hero_locked_now && !s_fg_detached) {
             overlay_on_present(g_win.swap_chain, g_win.queue);
 
             // v0.5.3 issue #30: Present1 with a tight dirty rect so DWM

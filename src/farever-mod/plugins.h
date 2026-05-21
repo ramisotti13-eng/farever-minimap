@@ -58,6 +58,13 @@ void plugins_emit_cast_start(const char* skill,
                              double total_sec);   // 0 if first sighting
 void plugins_emit_cast_end(const char* skill, double duration_sec);
 
+// v0.5.6: equipped weapon change. Fires from hero_state when
+// Hero.weaponInHand transitions to a new kind (also on the initial
+// observation after hero lock). Plugins receive on_event("weapon_changed",
+// {kind, prev_kind, level, upgrade}).
+void plugins_emit_weapon_changed(const char* kind, const char* prev_kind,
+                                 int level, int upgrade);
+
 // Plugin manager UI (ImGui window). Toggle with F8 by default.
 // Drawn from overlay_render when visible.
 void plugins_render_manager();

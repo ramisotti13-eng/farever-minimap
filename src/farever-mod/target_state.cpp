@@ -81,14 +81,17 @@ constexpr std::size_t OFF_SCTX_STOP_REASON   = 232;
 // well under 32; the cap is just a safety against a corrupted length.
 constexpr int kMaxSkillScan = 32;
 
-// UnitAttributes block — same indices hero_state uses. Slice 2 only
-// needs health (@240) and max_health (@248); we batch-read 208 bytes
-// starting at offset 48 of UnitAttributes so the f64 array lookups
-// stay simple. Extend later if the surface grows.
+// UnitAttributes block — same indices hero_state uses. Slice 2 needs
+// health (@240) and max_health (@248); slice 4 (damage planner) adds
+// armor (@216), magic_armor (@224), magic_reduction (@232). One batch
+// read covers everything up to max_health.
 constexpr std::size_t OFF_ATTR_BLOCK_BASE    = 48;
 constexpr std::size_t UA_BLOCK_BYTES         = 208;   // covers up to max_health@248
-constexpr int UA_IDX_HEALTH     = 24;   // 48 + 24*8 = 240
-constexpr int UA_IDX_MAX_HEALTH = 25;   // 48 + 25*8 = 248
+constexpr int UA_IDX_ARMOR           = 21;   // 48 + 21*8 = 216
+constexpr int UA_IDX_MAGIC_ARMOR     = 22;   // 48 + 22*8 = 224
+constexpr int UA_IDX_MAGIC_REDUCTION = 23;   // 48 + 23*8 = 232
+constexpr int UA_IDX_HEALTH          = 24;   // 48 + 24*8 = 240
+constexpr int UA_IDX_MAX_HEALTH      = 25;   // 48 + 25*8 = 248
 
 // hxbit indirection: Hero.__host(+48) -> NetworkHost; NetworkHost.ctx
 // (+112) -> NetworkSerializer; NetworkSerializer.refs(+8) -> the
@@ -545,9 +548,12 @@ void publish() {
         if (mem_is_userland(attr)) {
             double ua[26]{};   // up to and including max_health
             if (mem_read_bytes(attr + OFF_ATTR_BLOCK_BASE, ua, UA_BLOCK_BYTES)) {
-                s.attr_ok    = true;
-                s.health     = ua[UA_IDX_HEALTH];
-                s.max_health = ua[UA_IDX_MAX_HEALTH];
+                s.attr_ok         = true;
+                s.health          = ua[UA_IDX_HEALTH];
+                s.max_health      = ua[UA_IDX_MAX_HEALTH];
+                s.armor           = ua[UA_IDX_ARMOR];
+                s.magic_armor     = ua[UA_IDX_MAGIC_ARMOR];
+                s.magic_reduction = ua[UA_IDX_MAGIC_REDUCTION];
             }
         }
     }

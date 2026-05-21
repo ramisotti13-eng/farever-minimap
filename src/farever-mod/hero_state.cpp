@@ -45,6 +45,40 @@ constexpr std::size_t OFF_HERO_ATTR         = 976;   // HOBJ (ent.Unit.attr -> U
 
 constexpr std::size_t OFF_HERO_TARGET       = 648;   // i64 (ent.Unit.target)
 
+// Equipped weapon (Hero.weaponInHand @ 1304 -> st.item.Weapon*).
+// Item layout shared by Weapon/Armor/Gear: kind @ 88 (String), level @ 120,
+// upgradeLevel @ 124. Weapon-only: rarity @ 136, effects @ 144. We only
+// surface kind/level/upgrade for now; the deeper inf HVIRTUAL stays opaque.
+constexpr std::size_t OFF_HERO_WEAPON_IN_HAND = 1304;
+constexpr std::size_t OFF_ITEM_KIND           = 88;
+constexpr std::size_t OFF_ITEM_LEVEL          = 120;
+constexpr std::size_t OFF_ITEM_UPGRADE        = 124;
+
+// Full loadout walk: Hero.loadout @ 1192 -> st.Loadout.equipment @ 96
+// -> st.Equipment.content @ 96 (ArrayObj). ArrayObj layout: length @8,
+// varray @16, varray data starts at +24, element stride 8 bytes (pointer).
+constexpr std::size_t OFF_HERO_LOADOUT          = 1192;
+constexpr std::size_t OFF_LOADOUT_EQUIPMENT     = 96;
+constexpr std::size_t OFF_EQUIPMENT_CONTENT     = 96;
+constexpr std::size_t OFF_ARRAYOBJ_LENGTH       = 8;
+constexpr std::size_t OFF_ARRAYOBJ_VARRAY       = 16;
+constexpr std::size_t OFF_VARRAY_DATA           = 24;
+constexpr int         kMaxEquipmentItems        = 32;   // cap per-frame work
+
+// Active statuses: ent.Unit.instigatedStatuses @ 472 -> ArrayObj of
+// st.skill.Status. Status layout (post v0.5.5 +8 shift): kind @ 160,
+// duration @ 312, stacks @ 416.
+constexpr std::size_t OFF_UNIT_STATUSES         = 472;
+constexpr std::size_t OFF_STATUS_KIND           = 160;
+constexpr std::size_t OFF_STATUS_DURATION       = 312;
+constexpr std::size_t OFF_STATUS_STACKS         = 416;
+constexpr int         kMaxStatuses              = 32;
+
+// Haxe String reads use OFF_STR_BYTES = 8, OFF_STR_LEN = 16, declared
+// inline where they're used to avoid leaking constants between files.
+constexpr std::size_t OFF_STR_BYTES = 8;
+constexpr std::size_t OFF_STR_LEN   = 16;
+
 // UnitAttributes layout: the f64 block of interest runs from offset
 // 48 (vitality) through offset 328 (heal) — 30 consecutive doubles
 // covering stats, combat numbers, defense, resources, modifiers.
@@ -165,6 +199,35 @@ std::mutex                  g_snapshot_mu;
 constexpr double RX_LO = -10000.0, RX_HI = 10000.0;
 constexpr double RY_LO = -10000.0, RY_HI = 10000.0;
 constexpr double RZ_LO =   -500.0, RZ_HI =  1500.0;
+
+// Read a Haxe String (UTF-16 underneath) at the given pointer into a
+// plain std::string. ASCII-only, names up to 127 chars, returns false
+// on bad pointer / non-ASCII codepoint. Same pattern as target_state.
+bool read_haxe_string(std::uintptr_t str_ptr, std::string& out) {
+    out.clear();
+    if (!str_ptr || !mem_is_userland(str_ptr)) return false;
+    std::uint64_t bytes_u64 = 0;
+    std::int32_t  length    = 0;
+    if (!mem_read_u64(str_ptr + OFF_STR_BYTES, &bytes_u64)) return false;
+    auto bytes_ptr = static_cast<std::uintptr_t>(bytes_u64);
+    if (!mem_is_userland(bytes_ptr)) return false;
+    if (!mem_read_i32(str_ptr + OFF_STR_LEN, &length)) return false;
+    if (length <= 0 || length > 128) return false;
+
+    std::uint8_t buf[256];
+    std::size_t  nb = static_cast<std::size_t>(length) * 2;
+    if (nb > sizeof(buf)) return false;
+    if (!mem_read_bytes(bytes_ptr, buf, nb)) return false;
+
+    out.reserve(static_cast<std::size_t>(length));
+    for (int i = 0; i < length; ++i) {
+        std::uint16_t c = static_cast<std::uint16_t>(buf[i * 2]) |
+                          (static_cast<std::uint16_t>(buf[i * 2 + 1]) << 8);
+        if (c >= 0x80) return false;
+        out.push_back(static_cast<char>(c));
+    }
+    return true;
+}
 
 bool position_is_plausible(std::uintptr_t hero_ptr) {
     double pos[4];
@@ -471,6 +534,166 @@ void publish() {
                 }
             }
         }
+    }
+
+    // Equipped weapon chase. Hero.weaponInHand can be null briefly when
+    // the player is switching weapons; all reads are guarded.
+    std::uint64_t weapon_u64 = 0;
+    if (mem_read_u64(a + OFF_HERO_WEAPON_IN_HAND, &weapon_u64)) {
+        auto weapon = static_cast<std::uintptr_t>(weapon_u64);
+        if (mem_is_userland(weapon)) {
+            std::uint64_t kind_u64 = 0;
+            if (mem_read_u64(weapon + OFF_ITEM_KIND, &kind_u64)) {
+                auto kind = static_cast<std::uintptr_t>(kind_u64);
+                if (read_haxe_string(kind, s.weapon_kind)) {
+                    s.weapon_ok = true;
+                    std::int32_t lvl = 0, upg = 0;
+                    mem_read_i32(weapon + OFF_ITEM_LEVEL,   &lvl);
+                    mem_read_i32(weapon + OFF_ITEM_UPGRADE, &upg);
+                    s.weapon_level   = (int)lvl;
+                    s.weapon_upgrade = (int)upg;
+                }
+            }
+        }
+    }
+
+    // Detect weapon kind transitions and emit weapon_changed once per
+    // change. Static cache survives across publish() calls; cleared
+    // (via empty s.weapon_kind) when the lock drops, so the first read
+    // after a re-lock also fires the event with prev="".
+    static std::string s_prev_weapon_kind;
+    if (s.weapon_ok && s.weapon_kind != s_prev_weapon_kind) {
+        plugins_emit_weapon_changed(s.weapon_kind.c_str(),
+                                    s_prev_weapon_kind.c_str(),
+                                    s.weapon_level, s.weapon_upgrade);
+        s_prev_weapon_kind = s.weapon_kind;
+    } else if (!s.weapon_ok && !s_prev_weapon_kind.empty()) {
+        // Lost the weapon (hero re-lock, mid-swap, or read failure).
+        // Don't fire an event for the transient null, just reset the
+        // cache so the next observed kind re-fires as a fresh change.
+        s_prev_weapon_kind.clear();
+    }
+
+    // ---- Full loadout walk ----------------------------------------
+    // Throttle to ~1 Hz: gear doesn't change rapidly and the walk
+    // touches user-space inventory memory that may be mid-mutation
+    // while the player has the inventory window open (drag/drop).
+    // Cached equipment / statuses persist between throttled refreshes
+    // so plugins see a stable snapshot. publish() runs at ~15 Hz so
+    // we refresh every 15th call.
+    static std::vector<EquippedItem> s_cached_equipment;
+    static std::vector<ActiveStatus> s_cached_statuses;
+    static std::uint64_t             s_inventory_tick = 0;
+    bool refresh_inventory = (s_inventory_tick++ % 15) == 0;
+    if (!refresh_inventory) {
+        s.equipment = s_cached_equipment;
+        s.statuses  = s_cached_statuses;
+    }
+    std::uint64_t loadout_u64 = 0;
+    if (refresh_inventory && mem_read_u64(a + OFF_HERO_LOADOUT, &loadout_u64)) {
+        auto loadout = static_cast<std::uintptr_t>(loadout_u64);
+        if (mem_is_userland(loadout)) {
+            std::uint64_t equip_u64 = 0;
+            if (mem_read_u64(loadout + OFF_LOADOUT_EQUIPMENT, &equip_u64)) {
+                auto equipment = static_cast<std::uintptr_t>(equip_u64);
+                if (mem_is_userland(equipment)) {
+                    std::uint64_t arr_u64 = 0;
+                    if (mem_read_u64(equipment + OFF_EQUIPMENT_CONTENT,
+                                     &arr_u64)) {
+                        auto arr = static_cast<std::uintptr_t>(arr_u64);
+                        if (mem_is_userland(arr)) {
+                            std::int32_t length = 0;
+                            std::uint64_t varr_u64 = 0;
+                            if (mem_read_i32(arr + OFF_ARRAYOBJ_LENGTH,
+                                             &length) &&
+                                mem_read_u64(arr + OFF_ARRAYOBJ_VARRAY,
+                                             &varr_u64) &&
+                                length > 0 &&
+                                length <= kMaxEquipmentItems) {
+                                auto varr = static_cast<std::uintptr_t>(
+                                    varr_u64);
+                                if (mem_is_userland(varr)) {
+                                    auto data = varr + OFF_VARRAY_DATA;
+                                    s.equipment.reserve(length);
+                                    for (int i = 0; i < length; ++i) {
+                                        std::uint64_t item_u64 = 0;
+                                        if (!mem_read_u64(
+                                                data + i * 8, &item_u64))
+                                            continue;
+                                        auto item = static_cast<
+                                            std::uintptr_t>(item_u64);
+                                        if (!mem_is_userland(item)) continue;
+                                        std::uint64_t kind_u64 = 0;
+                                        if (!mem_read_u64(
+                                                item + OFF_ITEM_KIND,
+                                                &kind_u64)) continue;
+                                        EquippedItem ei;
+                                        if (!read_haxe_string(
+                                                static_cast<std::uintptr_t>(
+                                                    kind_u64),
+                                                ei.kind)) continue;
+                                        std::int32_t lvl = 0, upg = 0;
+                                        mem_read_i32(item + OFF_ITEM_LEVEL,
+                                                     &lvl);
+                                        mem_read_i32(item + OFF_ITEM_UPGRADE,
+                                                     &upg);
+                                        ei.level   = (int)lvl;
+                                        ei.upgrade = (int)upg;
+                                        s.equipment.push_back(std::move(ei));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Active statuses walk -------------------------------------
+    std::uint64_t status_arr_u64 = 0;
+    if (refresh_inventory && mem_read_u64(a + OFF_UNIT_STATUSES, &status_arr_u64)) {
+        auto sarr = static_cast<std::uintptr_t>(status_arr_u64);
+        if (mem_is_userland(sarr)) {
+            std::int32_t length = 0;
+            std::uint64_t varr_u64 = 0;
+            if (mem_read_i32(sarr + OFF_ARRAYOBJ_LENGTH, &length) &&
+                mem_read_u64(sarr + OFF_ARRAYOBJ_VARRAY, &varr_u64) &&
+                length > 0 && length <= kMaxStatuses) {
+                auto varr = static_cast<std::uintptr_t>(varr_u64);
+                if (mem_is_userland(varr)) {
+                    auto data = varr + OFF_VARRAY_DATA;
+                    s.statuses.reserve(length);
+                    for (int i = 0; i < length; ++i) {
+                        std::uint64_t status_u64 = 0;
+                        if (!mem_read_u64(data + i * 8, &status_u64))
+                            continue;
+                        auto status = static_cast<std::uintptr_t>(status_u64);
+                        if (!mem_is_userland(status)) continue;
+                        std::uint64_t kind_u64 = 0;
+                        if (!mem_read_u64(status + OFF_STATUS_KIND,
+                                          &kind_u64)) continue;
+                        ActiveStatus st;
+                        if (!read_haxe_string(
+                                static_cast<std::uintptr_t>(kind_u64),
+                                st.kind)) continue;
+                        mem_read_bytes(status + OFF_STATUS_DURATION,
+                                       &st.duration, sizeof(st.duration));
+                        std::int32_t stk = 0;
+                        mem_read_i32(status + OFF_STATUS_STACKS, &stk);
+                        st.stacks = (int)stk;
+                        s.statuses.push_back(std::move(st));
+                    }
+                }
+            }
+        }
+    }
+
+    // Cache the equipment / statuses we just refreshed so the next
+    // 14 throttled publishes can re-use them without re-reading.
+    if (refresh_inventory) {
+        s_cached_equipment = s.equipment;
+        s_cached_statuses  = s.statuses;
     }
 
     publish_snapshot(s);
