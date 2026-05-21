@@ -15,6 +15,7 @@
 #include "hero_state.h"
 #include "target_state.h"
 #include "aggregator.h"
+#include "pois.h"
 
 extern "C" {
 #include "lua.h"
@@ -906,6 +907,30 @@ int api_farever_now(lua_State* L) {
     return 1;
 }
 
+// farever.pois() returns the full POI list the mod loaded at boot
+// (from data/pois_<world>.json) as a Lua array of tables:
+//   {{ x, y, z, kind, subkind, name, id }, ...}
+// Order matches pois_get(). Snapshot of the in-memory data, cheap to
+// build (one table per POI, plus 7 fields each). Plugins can filter
+// by category/kind themselves and don't have to hardcode positions.
+int api_farever_pois(lua_State* L) {
+    const auto& list = pois_get();
+    lua_createtable(L, (int)list.size(), 0);
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        const auto& p = list[i];
+        lua_createtable(L, 0, 7);
+        lua_pushnumber (L, p.x);       lua_setfield(L, -2, "x");
+        lua_pushnumber (L, p.y);       lua_setfield(L, -2, "y");
+        lua_pushnumber (L, p.z);       lua_setfield(L, -2, "z");
+        lua_pushstring (L, p.kind);    lua_setfield(L, -2, "kind");
+        lua_pushstring (L, p.subkind); lua_setfield(L, -2, "subkind");
+        lua_pushstring (L, p.name);    lua_setfield(L, -2, "name");
+        lua_pushstring (L, p.id);      lua_setfield(L, -2, "id");
+        lua_rawseti(L, -2, (int)(i + 1));    // 1-based Lua array
+    }
+    return 1;
+}
+
 // Font scale in the CURRENT window. Resets to 1.0 each frame? No: it
 // persists until SetWindowFontScale is called again. Plugin authors
 // should reset to 1.0 after their scaled draws to avoid leaking the
@@ -1153,7 +1178,8 @@ void install_api(lua_State* L) {
 
     lua_pushcfunction(L, api_toast); lua_setfield(L, -2, "toast");
     lua_pushcfunction(L, api_sound); lua_setfield(L, -2, "sound");
-    lua_pushcfunction(L, api_farever_now); lua_setfield(L, -2, "now");
+    lua_pushcfunction(L, api_farever_now);  lua_setfield(L, -2, "now");
+    lua_pushcfunction(L, api_farever_pois); lua_setfield(L, -2, "pois");
 
     lua_setglobal(L, "farever");
 
