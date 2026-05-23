@@ -15,56 +15,56 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
   numbers the game itself shows above mobs, so other party members,
   ambient world damage and bleeds on you are out of the picture by
   construction.
-* **Plugin runtime** (new in 0.5.3, expanded in 0.5.4): drop your own
-  Lua scripts into `data/plugins/` and the mod loads them sandboxed
-  with hot reload on save. As of 0.5.4 plugin authors can read
-  target identity, HP and the active cast bar, react to
-  `target_changed` / `cast_start` / `cast_end` events, and play
-  audible warnings, which is enough to build boss-helper plugins.
-  See [plugin authoring guide](data/plugins/README.md).
+* **Plugin runtime**: drop your own Lua scripts into `data/plugins/`
+  and the mod loads them sandboxed with hot reload on save. Plugin
+  authors can read player + target state, HP, the active cast bar,
+  react to `target_changed` / `cast_start` / `cast_end` /
+  `weapon_changed` events, draw their own ImGui windows, and play
+  audible warnings — enough to build boss-helper plugins, custom
+  HUDs, and navigation arrows. See
+  [plugin authoring guide](data/plugins/README.md) and
+  [`examples/plugins/`](examples/plugins/) for reference plugins.
 
-## Status (May 2026)
+## Status (June 2026)
 
-The latest Farever game patch has made it much harder than usual to
-keep the mod stable. The hooking surface we rely on has become
-extremely sensitive to anything that touches it during the game's
-network sync windows, and the existing v0.5.6.x and v0.4.16 builds
-both crash for some users (issues #41, #42, #43).
+**v0.6.0 is the stable rewrite.** The recurring `DX12Driver.present`
+access violation from the v0.5.x series (issues #41, #42, #43) is
+fixed. The mod now reads game state from its own background thread
+that is invisible to the game's garbage collector, instead of riding
+the game's render thread — which removes the class of race that was
+causing the mid-session crash.
 
-We are actively working on a new stable build. Progress so far:
+Feature parity with v0.5.6.1 is restored: hero lock and minimap, DPS
+meter with real skill icons, target tracking, cast bar timing, fight
+history, plugin runtime, collectibles. Long-session testing (combat,
+zone changes, AFK) reaches clean shutdowns rather than crash-out
+exits.
 
-* The original `DX12Driver.present` access violation from the v0.5.x
-  series has a confirmed cause and is being addressed.
-* The minimum viable build (minimap only, no DPS, no target tracking)
-  still has stability issues we are investigating.
-* DPS meter, target tracking, cast bar and the damage planner will
-  almost certainly be reduced or absent in the next release while we
-  rebuild them on a safer foundation.
+One known limitation: **changing the game's in-game resolution while
+the mod is loaded can crash the game**. Quit to the launcher before
+changing resolution, then restart Farever. Fix planned for v0.6.1.
+See Compatibility notes below.
 
-There is no ETA yet. If the current releases are crashing for you,
-the most reliable option for now is to play without the mod and
-follow this repository for updates. If you have an open issue we
-will post there as soon as we have something to test.
-
-Thanks for the patience while we work through this.
+If v0.6.0 crashes for you, please open an issue with `farever-mod.log`
+attached.
 
 ## Which release do I download?
 
 There are two parallel builds on the [Releases page](../../releases).
 Pick once and stick with it.
 
-* **[v0.5.6](../../releases/latest)** — the main, actively developed
-  build. Use this unless your machine cannot run it.
-* **[v0.4.16](../../releases/tag/v0.4.16)** — a frozen legacy build
-  for users where v0.5.x cannot get the overlay up. This mostly hits
+* **[v0.6.0](../../releases/latest)** — the default. The stable
+  rewrite of v0.5.x. Use this unless your machine cannot run it.
+* **[v0.4.16](../../releases/tag/v0.4.16)** — frozen legacy build for
+  users where v0.6.x cannot get the overlay up. This mostly hits
   older AMD cards with the MPO bug, very old Windows builds, or
   unusual driver configurations. v0.4.x renders directly into the
   game's swap chain and avoids the DirectComposition path entirely,
-  which dodges that whole class of problem. v0.4.16 is a constant-only
-  refresh of v0.4.15 against game v0.1.5.25921; the feature set is
-  identical to v0.4.15.
+  which dodges that whole class of problem. v0.4.16 is a refresh of
+  v0.4.15 against game v0.1.5.25921; feature set is much smaller (no
+  DPS meter, no plugins, no collectibles).
 
-| Feature                              | v0.5.6                        | v0.4.16                              |
+| Feature                              | v0.6.0                        | v0.4.16                              |
 | ------------------------------------ | ----------------------------- | ------------------------------------ |
 | Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
 | Loot tracker window                  | Yes                           | No                                   |
@@ -73,9 +73,9 @@ Pick once and stick with it.
 | Square minimap option                | Yes                           | No                                   |
 | Composition overlay (DCOMP)          | Yes                           | No, renders on the game's swap chain |
 | Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
-| Known long-session access violation  | No                            | Possible after long AFK DPS farming  |
+| Stable on post-patch game            | Yes                           | Yes                                  |
 
-If v0.5.6 does not bring up the overlay on your machine, try v0.4.16
+If v0.6.0 does not bring up the overlay on your machine, try v0.4.16
 before opening an issue. If neither works, then open the issue and
 attach `farever-mod.log` from your Farever folder.
 
@@ -183,7 +183,7 @@ right one much easier when several are stacked.
   drop progressively (Crit%, Max, Hits, Total, %). At the narrowest
   size you get just the icon and the DPS column.
 
-## Plugin runtime (v0.5.3+)
+## Plugin runtime
 
 Drop a `.lua` file into `data/plugins/` and the mod loads it
 automatically. The folder ships empty. Two folders in the repo host
@@ -202,8 +202,8 @@ Plugins get sandboxed Lua 5.4. They can read your player position,
 DPS, in-combat flag, fight events, the equipped weapon and the full
 loadout, plus the current target and its cast bar. They can draw
 their own ImGui window with text, buttons, sliders, checkboxes,
-color pickers, combos, progress bars, and (since v0.5.6) custom
-shapes for animated alerts and telegraphs. They can show centered
+color pickers, combos, progress bars, and custom shapes for
+animated alerts and telegraphs. They can show centered
 toast notifications, play system sounds, and persist per-plugin
 state to disk. They cannot touch game memory, network, the
 filesystem outside their own state, or other plugins' state. A bad
@@ -243,10 +243,10 @@ the new player Hero to spawn on the client and locks onto it as
 soon as the allocation comes through, which on slow loads can take
 a bit longer than the loading screen itself.
 
-If the overlay never appears at all on v0.5.3, check
-`farever-mod.log` for `all composition swap chain variants failed`.
-That is the AMD MPO interaction, and v0.5.2.3 onwards drops three
-auto-repair files into your Farever folder when this happens:
+If the overlay never appears at all, check `farever-mod.log` for
+`all composition swap chain variants failed`. That is the AMD MPO
+interaction, and the mod drops three auto-repair files into your
+Farever folder when this happens:
 `farever-fix-amd-overlay.reg` (double-click, accept the prompt,
 reboot), `farever-undo-amd-overlay-fix.reg` (rollback), and
 `OVERLAY_NOT_WORKING.txt` (plain-English step-by-step). If the .reg
@@ -313,6 +313,51 @@ is the fastest way to narrow the cause.
   upstream as a game-side issue; nothing we can fix from the mod's
   side directly.
 
+* **Changing in-game resolution crashes the game** (v0.6.0). The
+  overlay's swap chain doesn't survive the burst of `WM_SIZE`
+  messages Windows fires during a single resolution change; it ends
+  up in a `DEVICE_REMOVED` state and the game's own render path
+  crashes a fraction of a second later. Workaround: quit to the
+  launcher before changing resolution, then restart Farever. Fix
+  planned for v0.6.1.
+
+## What's new in 0.6.0
+
+A stability-first rewrite of how the mod reads game state. If you
+were on v0.5.6.1 and hitting the recurring `DX12Driver.present`
+crash, this release is for you.
+
+The user-visible change is just "it stops crashing mid-session".
+Under the hood the read path is structurally different:
+
+* **Background reader thread.** Hero position, target tracking, cast
+  timing and damage decoding all run on the mod's own thread at
+  20 Hz, not on the game's render thread. That thread is deliberately
+  not registered with the game's garbage collector, so the game's
+  stop-the-world synchronization never waits on us — which is the
+  pattern that was producing the mid-session crash.
+* **Own UID registry.** The mod no longer asks the game's network
+  serializer to resolve target UIDs at read time. Instead it builds
+  its own `uid → entity` map from new-entity allocations, with
+  per-pointer type-tag verification so dead entries can't surface a
+  stale pointer.
+* **Alloc-context icon resolution.** First-sight skill icons are now
+  resolved on the game's main thread (during a damage event) and
+  cached. The reader thread just looks up the cache, never touches
+  the dispatch path that v0.5 was racing on.
+
+Feature behaviour is the same as v0.5.6.1 — same minimap, same DPS
+meter, same plugin runtime, same hotkeys. Layout and persisted files
+(`farever_layout.ini`, `ui_state.json`, `keybinds.json`,
+`poi_done.json`, `data/plugins/`) are untouched.
+
+To revert to the v0.5.6.1 Present-driven path (unstable but legacy),
+drop an empty `data/no_worker.flag` next to your `dinput8.dll` and
+restart Farever.
+
+Known issue: changing in-game resolution while the mod is loaded can
+crash the game (see Compatibility notes). Fix planned for v0.6.1.
+
 ## What's new in 0.5.6
 
 A plugin-author release. Big API surface bump that makes boss-helper, gear-inspector, HUD and navigation-arrow plugins buildable from Lua without further DLL work. If you don't write plugins, the only user-visible change is the **mouse-park** below; everything else is API-only and silent for everyone else.
@@ -331,36 +376,26 @@ The user-visible change:
 
 Two **opt-in workaround flags** for users hitting the alt-tab game crash (see Compatibility notes below): drop `data/cursor_park.flag` to clip the OS cursor to a 1-pixel box at center while invisible (heavier hand on the cursor, may interact with the game's wndproc), and `data/fg_detach.flag` to auto-detach our DCOMP visual during long foreground losses. Both are off by default; both hot-reload at ~2 Hz so you can toggle them without restarting.
 
-## What's new in 0.5.5
+## Older releases
 
-Compatibility patch for game version v0.1.5.25921 (released 2026-05-21). If you were on v0.5.4 and the overlay stopped showing up after the game patched, this is the fix. The game added two new fields to its `ent.Serializable` base class, which shifted every inherited Hero / Foe / Unit / Chest / BaseSkill field at offset 144 and beyond by 8 bytes. The mod's hero-lock predicate was reading the wrong byte and never matched, so the overlay never came up. All affected offsets were re-anchored against a fresh `hlboot.dat` dump.
+The per-release notes on the [Releases page](../../releases) carry
+the full history. Highlights:
 
-Drop in the new `dinput8.dll` and you are done. `data/plugins/`, plugin store files and `ui_state.json` are not touched.
-
-There is also a small new option for everyone, not just plugin authors:
-
-* **Square minimap**. The minimap has always been a disc. v0.5.6 adds a "Square minimap" checkbox in the settings panel (the keys / settings button on the bezel). Off by default keeps the circle, on swaps the mosaic clip, bezel border, POI clipping and bezel-button placement to the inscribed rectangle. The bezel buttons (pin, size cycle, lock, filter, chest, keys, plus, minus, collapse) stay at the angles you customized via right-click-drag, projected onto the square perimeter so the order is preserved. Toggling back to circle restores them to the ring. State persists in `data/ui_state.json`.
-
-Plugin API surface from 0.5.4 (`farever.target.*`, three events, `farever.sound()`) is unchanged.
-
-## What's new in 0.5.4
-
-This one is for plugin authors. The mod itself behaves the same as 0.5.3.2 for everyone else. If you do not write plugins you can take or skip this release.
-
-What's new for plugin authors:
-
-* **`farever.target.*`**. Reads of the foe (or hero in PvP) your character is currently engaged with. 14 getters covering identity (`exists`, `name`, `level`), position (`x`, `y`, `z`), health (`hp`, `max_hp`, `hp_pct`) and the active cast (`is_casting`, `cast_skill`, `cast_progress`, `cast_total_sec`, `cast_remaining_sec`, `cast_elapsed_sec`). Hero.lockedTarget / autoTarget / target in priority, hxbit UID resolved through the network host, type-anchored, all safe to call every frame.
-* **Three new events**. `target_changed` fires when the auto / locked target switches, `cast_start` fires when the target begins a non-auto skill, `cast_end` fires when it finishes. `cast_start.data.total_sec` carries the cached duration from the previous cast of the same skill, so the second time you see a boss skill the progress bar is real.
-* **`farever.sound()`**. Plays a Windows system sound by name (`alert`, `warning`, `info`, `beep`). Asynchronous, respects the user's mute setting, no audio files bundled. Pair it with `cast_start` for telegraph warnings.
-* **Boss-helper sample**. [`examples/plugins/target_probe.lua`](examples/plugins/target_probe.lua) shows every piece of the new surface in one file: target identity, HP bar, cast bar with timer, cast-start toast and an audible ping one second before the cast lands.
-
-Single-target only for now. A full multi-foe scanner is still on the roadmap; the read path that crashed in 0.5.3.1 needs to be rebuilt in isolation first. The single-target surface covers the vast majority of boss-helper use cases at a fraction of the read surface.
-
-Plugin authoring guide at [`data/plugins/README.md`](data/plugins/README.md) is updated with the new APIs and a complete boss-helper plugin sketch.
-
-## Changelog
-
-The latest "What's new" sections above cover the most recent user-visible changes. For older versions, the per-release notes on the [Releases page](../../releases) carry the full history (0.1 through 0.5.6), including the 0.5.3 Lua plugin system, the 0.5.3 DCOMP FPS fix for ultrawide / high-resolution setups ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)), the 0.5.3 HWND re-validation for AMD configurations ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29), [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)), the 0.5.3.1 Hero attribute surface for plugins, the 0.5.3.2 foe-tracker crash fix, and earlier compatibility work.
+* **0.5.6.1** — `farever.pois()` Lua API for plugin POI access.
+* **0.5.5** — game v0.1.5.25921 offset-shift compat + square minimap
+  option.
+* **0.5.4** — plugin API for target tracking + cast bar
+  (`farever.target.*`, `target_changed` / `cast_start` / `cast_end`
+  events, `farever.sound()`).
+* **0.5.3** — Lua plugin system, Present1 + dirty-rect FPS fix
+  ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)),
+  HWND re-validation for AMD configurations
+  ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29),
+  [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)).
+* **0.5** — own-window DCOMP overlay (architectural rewrite from the
+  v0.4 in-swap-chain rendering).
+* **0.4** — minimap + DPS meter, the original release line. v0.4.16
+  remains the legacy fallback for AMD MPO / old-Windows users.
 
 ## Notes
 
