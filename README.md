@@ -20,7 +20,7 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
   authors can read player + target state, HP, the active cast bar,
   react to `target_changed` / `cast_start` / `cast_end` /
   `weapon_changed` events, draw their own ImGui windows, and play
-  audible warnings — enough to build boss-helper plugins, custom
+  audible warnings. Enough to build boss-helper plugins, custom
   HUDs, and navigation arrows. See
   [plugin authoring guide](data/plugins/README.md) and
   [`examples/plugins/`](examples/plugins/) for reference plugins.
@@ -31,7 +31,7 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
 access violation from the v0.5.x series (issues #41, #42, #43) is
 fixed. The mod now reads game state from its own background thread
 that is invisible to the game's garbage collector, instead of riding
-the game's render thread — which removes the class of race that was
+the game's render thread, which removes the class of race that was
 causing the mid-session crash.
 
 Feature parity with v0.5.6.1 is restored: hero lock and minimap, DPS
@@ -53,9 +53,9 @@ attached.
 There are two parallel builds on the [Releases page](../../releases).
 Pick once and stick with it.
 
-* **[v0.6.0](../../releases/latest)** — the default. The stable
+* **[v0.6.0](../../releases/latest)**: the default. The stable
   rewrite of v0.5.x. Use this unless your machine cannot run it.
-* **[v0.4.16](../../releases/tag/v0.4.16)** — frozen legacy build for
+* **[v0.4.16](../../releases/tag/v0.4.16)**: frozen legacy build for
   users where v0.6.x cannot get the overlay up. This mostly hits
   older AMD cards with the MPO bug, very old Windows builds, or
   unusual driver configurations. v0.4.x renders directly into the
@@ -189,14 +189,14 @@ Drop a `.lua` file into `data/plugins/` and the mod loads it
 automatically. The folder ships empty. Two folders in the repo host
 ready-to-use plugins:
 
-* [`examples/plugins/`](examples/plugins/) — first-party reference
+* [`examples/plugins/`](examples/plugins/): first-party reference
   plugins maintained with the mod (hello_world, personal_best,
   target_probe boss-helper, damage_planner, api_inspector, animation
   demo).
-* [`community-plugins/`](community-plugins/) — submissions from
-  users of the mod. Each file has the author's GitHub handle in its
-  filename and a header naming the source. See that folder's
-  README for the submission process.
+* [`community-plugins/`](community-plugins/): submissions from users
+  of the mod. Each file has the author's GitHub handle in its
+  filename and a header naming the source. See that folder's README
+  for the submission process.
 
 Plugins get sandboxed Lua 5.4. They can read your player position,
 DPS, in-combat flag, fight events, the equipped weapon and the full
@@ -302,10 +302,10 @@ is the fastest way to narrow the cause.
   (`h3d.impl.DX12Driver.present`) after a long foreground loss
   followed by returning to the game. Pattern: alt-tab to Discord /
   browser / Steam overlay for several seconds, come back, the game
-  crashes within a few frames. The mod is not the cause — when this
+  crashes within a few frames. The mod is not the cause: when this
   happens the mod's own ticks (`damage`, `hero_state`, `overlay
-  alive`) keep firing cleanly while the game's render thread dies
-  — but on a few setups the timing is reproducible. Workarounds:
+  alive`) keep firing cleanly while the game's render thread dies.
+  On a few setups the timing is still reproducible. Workarounds:
   hide the overlay (default F7) before alt-tabbing, switch to
   borderless windowed if you are in exclusive fullscreen, or try
   the opt-in `data/fg_detach.flag` and `data/cursor_park.flag`
@@ -334,7 +334,7 @@ Under the hood the read path is structurally different:
   timing and damage decoding all run on the mod's own thread at
   20 Hz, not on the game's render thread. That thread is deliberately
   not registered with the game's garbage collector, so the game's
-  stop-the-world synchronization never waits on us — which is the
+  stop-the-world synchronization never waits on us, which is the
   pattern that was producing the mid-session crash.
 * **Own UID registry.** The mod no longer asks the game's network
   serializer to resolve target UIDs at read time. Instead it builds
@@ -346,7 +346,7 @@ Under the hood the read path is structurally different:
   cached. The reader thread just looks up the cache, never touches
   the dispatch path that v0.5 was racing on.
 
-Feature behaviour is the same as v0.5.6.1 — same minimap, same DPS
+Feature behaviour is the same as v0.5.6.1. Same minimap, same DPS
 meter, same plugin runtime, same hotkeys. Layout and persisted files
 (`farever_layout.ini`, `ui_state.json`, `keybinds.json`,
 `poi_done.json`, `data/plugins/`) are untouched.
@@ -372,7 +372,7 @@ For plugin authors:
 
 The user-visible change:
 
-* **Mouse-park**. When the game has the cursor invisible (camera mode after an ALT toggle) the overlay used to still register hovers from the invisible cursor drifting over its widgets. v0.5.6 overrides ImGui's notion of the mouse to off-screen while the OS cursor is hidden, so widgets stop pretending you're touching them. Active by default, no flag needed. Does not touch the OS cursor itself — the physical cursor keeps moving normally, only the overlay's hover state is suppressed.
+* **Mouse-park**. When the game has the cursor invisible (camera mode after an ALT toggle) the overlay used to still register hovers from the invisible cursor drifting over its widgets. v0.5.6 overrides ImGui's notion of the mouse to off-screen while the OS cursor is hidden, so widgets stop pretending you're touching them. Active by default, no flag needed. Does not touch the OS cursor itself: the physical cursor keeps moving normally, only the overlay's hover state is suppressed.
 
 Two **opt-in workaround flags** for users hitting the alt-tab game crash (see Compatibility notes below): drop `data/cursor_park.flag` to clip the OS cursor to a 1-pixel box at center while invisible (heavier hand on the cursor, may interact with the game's wndproc), and `data/fg_detach.flag` to auto-detach our DCOMP visual during long foreground losses. Both are off by default; both hot-reload at ~2 Hz so you can toggle them without restarting.
 
@@ -381,20 +381,20 @@ Two **opt-in workaround flags** for users hitting the alt-tab game crash (see Co
 The per-release notes on the [Releases page](../../releases) carry
 the full history. Highlights:
 
-* **0.5.6.1** — `farever.pois()` Lua API for plugin POI access.
-* **0.5.5** — game v0.1.5.25921 offset-shift compat + square minimap
+* **0.5.6.1**: `farever.pois()` Lua API for plugin POI access.
+* **0.5.5**: game v0.1.5.25921 offset-shift compat + square minimap
   option.
-* **0.5.4** — plugin API for target tracking + cast bar
+* **0.5.4**: plugin API for target tracking + cast bar
   (`farever.target.*`, `target_changed` / `cast_start` / `cast_end`
   events, `farever.sound()`).
-* **0.5.3** — Lua plugin system, Present1 + dirty-rect FPS fix
+* **0.5.3**: Lua plugin system, Present1 + dirty-rect FPS fix
   ([#30](https://github.com/ramisotti13-eng/farever-minimap/issues/30)),
   HWND re-validation for AMD configurations
   ([#29](https://github.com/ramisotti13-eng/farever-minimap/issues/29),
   [#31](https://github.com/ramisotti13-eng/farever-minimap/issues/31)).
-* **0.5** — own-window DCOMP overlay (architectural rewrite from the
+* **0.5**: own-window DCOMP overlay (architectural rewrite from the
   v0.4 in-swap-chain rendering).
-* **0.4** — minimap + DPS meter, the original release line. v0.4.16
+* **0.4**: minimap + DPS meter, the original release line. v0.4.16
   remains the legacy fallback for AMD MPO / old-Windows users.
 
 ## Notes
