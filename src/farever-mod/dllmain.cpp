@@ -14,6 +14,7 @@
 #include "dinput8_proxy.h"
 #include "libhl.h"
 #include "hl_hook.h"
+#include "hl_pump.h"
 #include "damage.h"
 #include "hero_state.h"
 #include "skill_resolve.h"
@@ -151,8 +152,35 @@ DWORD WINAPI worker_thread(LPVOID) {
         fv::logf("worker: d3d12_hook_install failed — render-thread "
                  "ticks won't fire");
     }
-    fv::logf("worker: live — alloc-hook + d3d12 hook armed; "
-             "damage_tick + hero_state_tick drive from Present");
+    // v0.4.17 backport: HL-GC-invisible background worker, default-on.
+    // Drives damage_tick + hero_state_tick at 20 Hz off a plain Win32
+    // thread instead of from D3D12 Present. The thread is invisible to
+    // the HashLink GC (no hl_register_thread / hl_blocking) which
+    // matches Companion's pattern and eliminates the GC-vs-our-reads
+    // race that produced the v0.5.x DX12Driver.present AVs.
+    //
+    // Opt-out: data/no_worker.flag falls back to the v0.4.16 Present-
+    // driven path. Useful if a user has trouble with the new path or
+    // wants to confirm a regression against the old behaviour.
+    //
+    // Anticrash interaction: anticrash.flag still arms the disarm.
+    // Once disarmed, the worker keeps ticking — damage_tick is a no-op
+    // (damage_stop was called) and hero_state_tick uses its post-disarm
+    // poll path. Net effect: hero snapshot keeps publishing, no
+    // alloc-hook overhead.
+    if (kill_switch("FAREVER_NO_WORKER", "no_worker.flag")) {
+        fv::logf("worker: no_worker.flag set — using v0.4.16 Present-"
+                 "driven ticks (HL-GC-invisible worker disabled)");
+    } else {
+        if (!fv::hl_pump_start(g_libhl)) {
+            fv::logf("worker: hl_pump_start failed — falling back to "
+                     "Present-driven ticks");
+        }
+    }
+    fv::logf("worker: live — alloc-hook + d3d12 hook armed; tick "
+             "driver = %s",
+             fv::hl_pump_is_active() ? "background worker (hl_pump)"
+                                     : "Present hook");
     return 0;
 }
 
@@ -183,6 +211,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             // re-poking the game's vtable mid-tear-down. We still
             // stop the render ticks so they don't keep firing into
             // freed state if the teardown takes longer than expected.
+            fv::hl_pump_stop();
             fv::hero_state_stop();
             fv::damage_stop();
             // Intentionally NOT calling overlay_shutdown,

@@ -6,6 +6,7 @@ add_library(farever_mod SHARED
     mem_scan.cpp
     type_anchor.cpp
     hl_hook.cpp
+    hl_pump.cpp
     damage.cpp
     aggregator.cpp
     hero_state.cpp

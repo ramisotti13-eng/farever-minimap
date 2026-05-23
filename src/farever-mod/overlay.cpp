@@ -2443,7 +2443,7 @@ void render_diagnostic_box() {
     ImGui::PushStyleVar  (ImGuiStyleVar_WindowBorderSize, 1.5f);
     if (ImGui::Begin("##farever_diag", nullptr, flags)) {
         ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.40f, 1.0f),
-                           "farever-mod v0.4.15");
+                           "farever-mod v0.4.17");
         ImGui::Separator();
         if (g_diag_no_overlay.load()) {
             ImGui::Text("no_overlay.flag  ACTIVE");

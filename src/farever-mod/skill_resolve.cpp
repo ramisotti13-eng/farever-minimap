@@ -3,15 +3,23 @@
 // The chain is:
 //
 //   BaseSkill   @ HOBJ at  baseSkill_ptr
-//     +144     -> inf : HVIRTUAL  ( = vvirtual*, the CDB row record )
+//     +152     -> inf : HVIRTUAL  ( = vvirtual*, the CDB row record )
 //                  .gfx : HVIRTUAL ( file: String, x: I32, y: I32,
 //                                    size: I32, width: ?, height: ? )
 //
 // We cache per-skill-name so the dyn calls only run once per kind.
+//
+// v0.4.17 backport from v0.6.0: split into worker-aware public
+// wrapper + internal impl, plus single-slot deferred queue that
+// damage_tick can hand off to when called from the hl_pump worker.
+// The pump drains in alloc-hook context (hxbit-safe).
 
 #include "skill_resolve.h"
+#include "hl_pump.h"
 #include "mem_scan.h"
 #include "log.h"
+
+#include <windows.h>
 
 #include <atomic>
 #include <cstring>
@@ -51,6 +59,17 @@ int            g_hash_height = 0;
 
 std::mutex                                g_cache_mu;
 std::unordered_map<std::string, SkillGfx> g_cache;
+
+// v0.4.17 deferred slot. Worker sets this when its query bails; the
+// alloc-context pump drains it. Single slot, overwrite-latest. Combat
+// allocates DDs frequently enough that the pump catches up.
+struct PendingResolve {
+    std::uintptr_t base_skill_ptr;
+    char           skill_name[64];
+};
+std::mutex     g_pending_mu;
+PendingResolve g_pending{};
+bool           g_pending_set = false;
 
 // Read a Haxe String (HOBJ:String at `str_ptr` — { bytes: vbytes*, len: i32 })
 // into an ASCII output buffer. The string is UTF-16; we drop any code
@@ -126,7 +145,13 @@ void skill_resolve_init(const LibHL& libhl) {
 // fails. After that the call is silent (steady state).
 std::atomic<int> g_trace_left{8};
 
-bool skill_resolve_query(std::uintptr_t base_skill_ptr, SkillGfx* out) {
+namespace {
+
+// Internal worker. No worker-thread bail. Caller MUST be on a safe
+// thread (Present hook on render thread, or alloc-context inside an
+// hl_alloc_obj watcher callback). Reads BaseSkill.inf.gfx via the
+// hl_dyn_getp dispatch chain.
+bool skill_resolve_query_impl(std::uintptr_t base_skill_ptr, SkillGfx* out) {
     bool trace = g_trace_left.fetch_sub(1) > 0;
     auto fail = [&](const char* where, std::uint64_t v = 0) {
         if (trace) logf("skill_resolve: fail @ %s (val=0x%llx)",
@@ -155,9 +180,6 @@ bool skill_resolve_query(std::uintptr_t base_skill_ptr, SkillGfx* out) {
     if (!mem_is_userland(reinterpret_cast<std::uintptr_t>(gfx)))
         return fail("gfx_kernel");
 
-    // hl_dyn_getp with result_type=hlt_dyn returns the underlying
-    // pointer for a pointer-typed field — no extra vdynamic wrapper —
-    // so file_str is the Haxe String object directly.
     void* file_str = g_dyn_getp(gfx, g_hash_file, g_hlt_dyn);
     if (trace) logf("skill_resolve: file_str=%p", file_str);
     if (!file_str)                                         return fail("file_null");
@@ -175,8 +197,6 @@ bool skill_resolve_query(std::uintptr_t base_skill_ptr, SkillGfx* out) {
     int size = g_dyn_geti(gfx, g_hash_size, g_hlt_i32);
     if (size <= 0) size = 96;
 
-    // width / height are HNULL<I32>. hl_dyn_geti coerces null to 0
-    // (HashLink default). Treat any non-positive as "1 cell".
     int w = g_dyn_geti(gfx, g_hash_width,  g_hlt_i32);
     int h = g_dyn_geti(gfx, g_hash_height, g_hlt_i32);
     if (w <= 0) w = 1;
@@ -191,6 +211,48 @@ bool skill_resolve_query(std::uintptr_t base_skill_ptr, SkillGfx* out) {
     if (trace) logf("skill_resolve: OK file=%s xy=(%d,%d) sz=%d wh=(%d,%d)",
                     out->atlas_filename, x, y, size, w, h);
     return out->atlas_filename[0] != 0;
+}
+
+}  // namespace (impl)
+
+// Public query. From the hl_pump worker thread we bail out — hl_dyn_getp
+// dispatches through HashLink's field lookup and can collide with hxbit
+// deserialise on the same object. The caller (damage_tick) then queues
+// a deferred resolve via skill_resolve_request_deferred which the
+// alloc-context pump drains on the safe thread.
+bool skill_resolve_query(std::uintptr_t base_skill_ptr, SkillGfx* out) {
+    unsigned long worker = hl_pump_worker_tid();
+    if (worker != 0 && GetCurrentThreadId() == worker) {
+        return false;
+    }
+    return skill_resolve_query_impl(base_skill_ptr, out);
+}
+
+void skill_resolve_request_deferred(const char* skill_kind,
+                                    std::uintptr_t base_skill_ptr) {
+    if (!skill_kind || !*skill_kind || !base_skill_ptr) return;
+    std::lock_guard<std::mutex> lk(g_pending_mu);
+    g_pending.base_skill_ptr = base_skill_ptr;
+    std::strncpy(g_pending.skill_name, skill_kind,
+                 sizeof(g_pending.skill_name) - 1);
+    g_pending.skill_name[sizeof(g_pending.skill_name) - 1] = 0;
+    g_pending_set = true;
+}
+
+void skill_resolve_pump_in_alloc_context() {
+    PendingResolve req;
+    {
+        std::lock_guard<std::mutex> lk(g_pending_mu);
+        if (!g_pending_set) return;
+        req = g_pending;
+        g_pending_set = false;
+    }
+    SkillGfx gfx{};
+    if (skill_resolve_query_impl(req.base_skill_ptr, &gfx)) {
+        skill_resolve_cache(req.skill_name, gfx);
+        logf("skill_resolve: deferred resolve OK skill='%s' file=%s xy=(%d,%d) sz=%d",
+             req.skill_name, gfx.atlas_filename, gfx.x, gfx.y, gfx.size);
+    }
 }
 
 void skill_resolve_cache(const char* skill_kind, const SkillGfx& gfx) {

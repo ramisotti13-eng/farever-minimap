@@ -178,6 +178,11 @@ bool try_decode(std::uintptr_t dd_ptr, DamageEvent* out) {
     // expected for early ticks (libhl exports may not have resolved
     // yet) and for skills whose `inf` virtual hasn't been initialised
     // yet — the next event for the same kind will retry.
+    //
+    // v0.4.17: skill_resolve_query bails when called from the hl_pump
+    // worker thread (hl_dyn_getp isn't hxbit-safe off the game's main
+    // thread). On bail we queue a deferred resolve; on_dd_alloc drains
+    // it on the next damage-display allocation, which IS hxbit-safe.
     SkillGfx gfx{};
     if (!skill_resolve_lookup(skill, &gfx)) {
         std::uint64_t bs_u64 = 0;
@@ -185,6 +190,9 @@ bool try_decode(std::uintptr_t dd_ptr, DamageEvent* out) {
             if (skill_resolve_query(
                     static_cast<std::uintptr_t>(bs_u64), &gfx)) {
                 skill_resolve_cache(skill, gfx);
+            } else {
+                skill_resolve_request_deferred(
+                    skill, static_cast<std::uintptr_t>(bs_u64));
             }
         }
     }
@@ -213,9 +221,16 @@ void on_dd_alloc(std::uintptr_t dd_ptr) {
     // DPS-tracking accuracy loss vs. an unbounded queue and the
     // associated GC / render-thread risk on long sessions.
     constexpr std::size_t kMaxPending = 256;
-    std::lock_guard<std::mutex> lk(g_pending_mu);
-    g_pending.push_back({dd_ptr, 0});
-    while (g_pending.size() > kMaxPending) g_pending.pop_front();
+    {
+        std::lock_guard<std::mutex> lk(g_pending_mu);
+        g_pending.push_back({dd_ptr, 0});
+        while (g_pending.size() > kMaxPending) g_pending.pop_front();
+    }
+    // v0.4.17: drain any skill-resolve work the worker thread queued.
+    // This callback runs on the game's main thread (the hl_alloc_obj
+    // caller), which is hxbit-safe, so hl_dyn_getp dispatch is OK
+    // here. Cheap when nothing is queued.
+    skill_resolve_pump_in_alloc_context();
 }
 
 }  // namespace
