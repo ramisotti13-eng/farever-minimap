@@ -61,3 +61,4 @@ breaks across game updates the original author is the right person to ping.
 | File | Author | Description | Tested against |
 | ---- | ------ | ----------- | -------------- |
 | [`poi_height-by-iskrumpie.lua`](poi_height-by-iskrumpie.lua) | [@iSkrumpie](https://github.com/ramisotti13-eng/farever-minimap/issues/36) | Lists nearby POIs (chests, ores, plants, activities) within a configurable radius with a per-row up/down/level arrow, XY distance and vertical offset from the player. | v0.5.5 |
+| [`damage-calculator-by-iskrumpie.lua`](damage-calculator-by-iskrumpie.lua) | [@iSkrumpie](https://github.com/ramisotti13-eng/farever-minimap/pull/51) | PvE damage calculator using Aragon's verified formula: rating-to-% inputs (fervor, armor pen, crit), enemy armor presets, visual damage bars, dual-attribute scaling and a +20-rating stat-gain analysis. | v0.6.2 |

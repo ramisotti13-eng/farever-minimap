@@ -1,7 +1,7 @@
 -- ==============================================================
 -- damage-calculator-by-iskrumpie.lua
--- Submitted by @iSkrumpie  (https://github.com/ramisotti13-eng/farever-minimap/pull/41)
--- Tested against farever-mod v0.5.6.1
+-- Submitted by @iSkrumpie  (https://github.com/ramisotti13-eng/farever-minimap/pull/51)
+-- Tested against farever-mod v0.6.2
 -- License: MIT
 --
 -- PvE damage calculator using Aragon's verified formula — rating inputs,
