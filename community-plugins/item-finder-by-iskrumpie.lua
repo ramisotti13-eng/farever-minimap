@@ -1,7 +1,7 @@
 -- ==============================================================
 -- item-finder-by-iskrumpie.lua
--- Submitted by @iSkrumpie
--- Tested against farever-mod v0.5.6.1
+-- Submitted by @iSkrumpie  (https://github.com/ramisotti13-eng/farever-minimap/pull/52)
+-- Tested against farever-mod v0.6.3
 -- License: MIT
 --
 -- Search every item, material and mob in the game by name.

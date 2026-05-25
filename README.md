@@ -336,6 +336,17 @@ is the fastest way to narrow the cause.
   launcher before changing resolution, then restart Farever. Fix
   planned for v0.6.1.
 
+## Contributors
+
+Community plugins in [`community-plugins/`](community-plugins/) are
+written and shared by players of the mod:
+
+* [@iSkrumpie](https://github.com/iSkrumpie) — POI finder, PvE damage calculator, item finder
+* [@KaareGravesen](https://github.com/KaareGravesen) — mob codex checker
+
+Thanks for sharing your work. Want your plugin listed here? See the
+[community-plugins README](community-plugins/README.md).
+
 ## Notes
 
 The mod is read only. It reads your own player state out of the
