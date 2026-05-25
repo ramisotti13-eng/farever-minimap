@@ -1,6 +1,6 @@
 -- ============================================================
 -- POI Finder v2 — by @iSkrumpie
--- Tested against: farever-mod v0.5.6.1
+-- Tested against: farever-mod v0.6.3
 -- License: MIT
 --
 -- v2.0.0 (2026-05-22):

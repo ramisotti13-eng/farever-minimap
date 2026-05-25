@@ -1,7 +1,7 @@
 -- ==============================================================
 -- damage-calculator-by-iskrumpie.lua
 -- Submitted by @iSkrumpie  (https://github.com/ramisotti13-eng/farever-minimap/pull/51)
--- Tested against farever-mod v0.6.2
+-- Tested against farever-mod v0.6.3
 -- License: MIT
 --
 -- PvE damage calculator using Aragon's verified formula — rating inputs,
@@ -184,6 +184,32 @@ function on_render()
         end
     end
 
+    -- ── import from player (v0.6+) ────────────────────────────────────────────
+    if farever.player.locked() then
+        if imgui.button("\xe2\x86\x93 Import stats from player") then
+            s.fervor_r    = farever.player.fervor()            * 15.0
+            s.armor_pen_r = farever.player.armor_penetration() * 6.0
+            s.crit_r      = farever.player.crit_chance()       * 100.0 * 12.5
+            s.crit_bonus  = farever.player.crit_damage()       * 100.0
+            local pm      = farever.player.physical_mastery()
+            local mm      = farever.player.magic_mastery()
+            s.mastery     = math.max(pm, mm)
+            changed = true
+            farever.toast("Stats imported from player")
+        end
+        imgui.text_colored(0.42, 0.42, 0.42, 1.0,
+            string.format("  live: fervor %.0fr  ap %.0fr  crit %.0fr  mastery %.1f%%",
+                farever.player.fervor()            * 15.0,
+                farever.player.armor_penetration() * 6.0,
+                farever.player.crit_chance()       * 100.0 * 12.5,
+                math.max(farever.player.physical_mastery(),
+                         farever.player.magic_mastery())))
+        imgui.text_colored(0.42, 0.42, 0.42, 1.0,
+            string.format("  STR %d  DEX %d  FAI %d  INT %d",
+                farever.player.strength(),  farever.player.dexterity(),
+                farever.player.faith(),     farever.player.intellect()))
+    end
+
     imgui.separator()
 
     -- ── WEAPON & SKILL ────────────────────────────────────────────────────────
@@ -283,6 +309,24 @@ function on_render()
             s.enemy_armor * (1.0 - armor_pen_pct(s.armor_pen_r) / 100.0)))
     else
         imgui.text_colored(0.55, 0.55, 0.55, 1.0, "  No armor (dummy)")
+    end
+
+    -- live damage_modifier from player (v0.6+) ─────────────────────────────
+    if farever.player.locked() then
+        local dm = farever.player.damage_modifier()
+        if dm and math.abs(dm - 1.0) > 0.005 then
+            imgui.text_colored(0.40, 0.95, 0.55, 1.0, string.format(
+                "  Buff modifier: \xc3\x97%.3f  \xe2\x86\x92 effective avg: %.1f",
+                dm, avg * dm))
+        end
+        -- live enemy armor hint if target exists
+        if farever.target.exists() then
+            local ta = farever.target.armor()
+            if ta and ta > 0 then
+                imgui.text_colored(0.42, 0.42, 0.42, 1.0, string.format(
+                    "  Target armor (live): %.0f  [drag Enemy armor to match]", ta))
+            end
+        end
     end
 
     imgui.separator()
