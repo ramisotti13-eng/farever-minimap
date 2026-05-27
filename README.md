@@ -27,59 +27,41 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
 
 ## Status (June 2026)
 
-**v0.6.0 is the stable rewrite.** The recurring `DX12Driver.present`
-access violation from the v0.5.x series (issues #41, #42, #43) is
-fixed. The mod now reads game state from its own background thread
-that is invisible to the game's garbage collector, instead of riding
-the game's render thread, which removes the class of race that was
-causing the mid-session crash.
+**v0.6.3 is the current stable build, and the v1.0.0 line is in beta.**
+The recurring `DX12Driver.present` access violation from the v0.5.x
+series (issues #41, #42, #43) was fixed in v0.6.0: the mod reads game
+state from its own background thread that is invisible to the game's
+garbage collector, instead of riding the game's render thread, which
+removes the class of race that was causing the mid-session crash.
 
-Feature parity with v0.5.6.1 is restored: hero lock and minimap, DPS
-meter with real skill icons, target tracking, cast bar timing, fight
-history, plugin runtime, collectibles. Long-session testing (combat,
-zone changes, AFK) reaches clean shutdowns rather than crash-out
-exits.
+The **v1.0.0 beta** unifies the old DirectComposition and swap-chain
+builds into one DLL and renders straight into the game's own Direct3D 12
+swap chain by default. That removes the desktop-compositor overhead,
+dodges the AMD MPO bug, and is the candidate path for Proton / Steam
+Play (Linux). It carries the full feature set (minimap, DPS + HPS meter,
+plugins, collectibles, custom minimap waypoints).
 
-One known limitation: **changing the game's in-game resolution while
-the mod is loaded can crash the game**. Quit to the launcher before
-changing resolution, then restart Farever. Fix planned for v0.6.1.
-See Compatibility notes below.
-
-If v0.6.0 crashes for you, please open an issue with `farever-mod.log`
+If the mod crashes for you, please open an issue with `farever-mod.log`
 attached.
 
 ## Which release do I download?
 
-There are two parallel builds on the [Releases page](../../releases).
-Pick once and stick with it.
+Two builds on the [Releases page](../../releases):
 
-* **[v0.6.0](../../releases/latest)**: the default. The stable
-  rewrite of v0.5.x. Use this unless your machine cannot run it.
-* **[v0.4.17](../../releases/tag/v0.4.17)**: legacy build for users
-  where v0.6.x cannot get the overlay up. This mostly hits older AMD
-  cards with the MPO bug, very old Windows builds, or unusual driver
-  configurations. v0.4.x renders directly into the game's swap chain
-  and avoids the DirectComposition path entirely, which dodges that
-  whole class of problem. v0.4.17 ports the same HL-GC-invisible
-  worker stability fix from v0.6.0 onto the v0.4.x rendering path, so
-  this branch is up to date with the post-patch game. Feature set is
-  much smaller (DPS meter and minimap only; no plugins, no
-  collectibles, no Lua API).
+* **[v0.6.3](../../releases/latest)** — the current stable build, and
+  the default choice. Use this unless you want the newest features or
+  you are on Proton or an AMD-MPO setup.
+* **[v1.0.0 beta](../../releases)** — the next line, in preview. Grab
+  the latest `v1.0.0-betaN` prerelease. It renders into the game's own
+  Direct3D 12 swap chain by default (no DirectComposition), so it has
+  no desktop-compositor overhead, dodges the AMD MPO bug, and is the
+  candidate build for Proton / Steam Play (Linux). Same feature set as
+  the stable build, plus HPS tracking and custom minimap waypoints.
 
-| Feature                              | v0.6.0                        | v0.4.17                              |
-| ------------------------------------ | ----------------------------- | ------------------------------------ |
-| Minimap + DPS meter                  | Yes                           | Yes (older UI, fewer polish passes)  |
-| Loot tracker window                  | Yes                           | No                                   |
-| UI scale slider for 4K monitors      | Yes                           | No                                   |
-| Lua plugin system                    | Yes                           | No                                   |
-| Square minimap option                | Yes                           | No                                   |
-| Composition overlay (DCOMP)          | Yes                           | No, renders on the game's swap chain |
-| Works through AMD MPO / DCOMP bugs   | Sometimes, with .reg fix      | Yes, the path is not used at all     |
-| Stable on post-patch game            | Yes                           | Yes                                  |
-
-If v0.6.0 does not bring up the overlay on your machine, try v0.4.17
-before opening an issue. If neither works, then open the issue and
-attach `farever-mod.log` from your Farever folder.
+Both carry the full feature set: minimap, DPS meter, plugin runtime,
+collectibles, Lua API. If a build does not bring up the overlay on your
+machine, open an issue and attach `farever-mod.log` from your Farever
+folder.
 
 ## How to install
 
@@ -252,8 +234,9 @@ Farever folder when this happens:
 `farever-fix-amd-overlay.reg` (double-click, accept the prompt,
 reboot), `farever-undo-amd-overlay-fix.reg` (rollback), and
 `OVERLAY_NOT_WORKING.txt` (plain-English step-by-step). If the .reg
-trick does not bring it up either, switch to the v0.4.17 legacy
-build linked above.
+trick does not bring it up either, try the v1.0.0 beta: it renders
+into the game's own swap chain and skips the composition layer
+entirely, so the MPO interaction does not apply.
 
 If the game crashes after a while, please zip the `farever-mod.log`
 file from your Farever folder and open an issue with it attached.
@@ -280,9 +263,9 @@ is the fastest way to narrow the cause.
   the GPU scanout and DWM is not in the loop, so our composition
   layer is invisible. Use borderless windowed instead. Most monitor
   + GPU combos run borderless at essentially the same framerate as
-  exclusive these days. The v0.4.17 legacy build doesn't have this
-  problem because it renders directly into the game's own swap
-  chain, no composition layer involved.
+  exclusive these days. The v1.0.0 beta doesn't have this problem in
+  its default mode because it renders directly into the game's own
+  swap chain, no composition layer involved.
 
 * **Holding ALT plus left mouse button on an overlay window can
   trigger auto-attack when ALT is released**
@@ -295,12 +278,11 @@ is the fastest way to narrow the cause.
   the overlay with F7 while playing actively and toggle it back on
   when you want to read the minimap or DPS numbers.
 
-* **Big monitors (4K and up) need a UI scale bump (v0.6.x only).**
+* **Big monitors (4K and up) need a UI scale bump.**
   Default text size is tuned for 1080p / 1440p. On 4K + large display
   open the filter tablet (funnel button on the minimap bezel) and use
   the "UI scale (text)" slider, 2.0x to 2.5x is usually right for
-  a 48 inch 4K display. The v0.4.17 legacy build doesn't carry the
-  scale slider, so on 4K the v0.4.17 UI will be small.
+  a 48 inch 4K display.
 
 * **Alt-tab game crash since the v0.1.5.25921 patch.** Some users
   hit an access violation in the game's own DX12 renderer
@@ -333,13 +315,12 @@ is the fastest way to narrow the cause.
   [#45](https://github.com/ramisotti13-eng/farever-minimap/issues/45)
   so we can confirm a working setup.
 
-* **Changing in-game resolution crashes the game** (v0.6.0). The
-  overlay's swap chain doesn't survive the burst of `WM_SIZE`
-  messages Windows fires during a single resolution change; it ends
-  up in a `DEVICE_REMOVED` state and the game's own render path
-  crashes a fraction of a second later. Workaround: quit to the
-  launcher before changing resolution, then restart Farever. Fix
-  planned for v0.6.1.
+* **Rapidly changing in-game resolution can crash the game.**
+  Mitigated since v0.6.1, but cycling resolutions quickly can still
+  push the overlay's swap chain into a `DEVICE_REMOVED` state and
+  take the game's own render path down with it (an adapter-wide
+  driver error). Safest is to quit to the launcher before changing
+  resolution, then restart Farever.
 
 ## Contributors
 
