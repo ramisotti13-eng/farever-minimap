@@ -25,6 +25,21 @@ A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
   [plugin authoring guide](data/plugins/README.md) and
   [`examples/plugins/`](examples/plugins/) for reference plugins.
 
+## Are add-ons allowed?
+
+Yes, for personal use. The Farever developers addressed add-ons on
+their official Discord:
+
+> While we won't promote the use of add-ons during the EA (to keep
+> players on the intended experience at first), we won't condemn
+> personal use of add-ons like minimaps or DPS meter.
+
+![Farever developers on personal add-on use (official Discord)](https://i.imgur.com/FYduqe4.png)
+
+This overlay is read-only personal use exactly along those lines: it
+reads your own player state and draws on top of the game, nothing
+more (see [Notes](#notes) at the end).
+
 ## Status (June 2026)
 
 **v0.6.3 is the current stable build, and the v1.0.0 line is in beta.**
