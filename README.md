@@ -318,15 +318,20 @@ is the fastest way to narrow the cause.
   next to `dinput8.dll`, restart). Filed upstream as a game-side
   issue; nothing we can fix from the mod's side directly.
 
-* **Proton / Steam Play (Linux) currently untested**
+* **Proton / Steam Play (Linux): try the v1.0.0 beta**
   ([#45](https://github.com/ramisotti13-eng/farever-minimap/issues/45)).
-  The v0.6.x rendering path uses DirectComposition through DXGI, which
-  is the part of the Windows graphics stack Proton's wined3d / vkd3d
-  shims cover least completely. No-one has reported a working setup
-  yet. The v0.4.17 legacy build is the more likely candidate to work
-  under Proton because it sticks to the game's own swap chain and
-  skips the composition layer entirely, but it's also unconfirmed. If
-  you try it on Proton, please attach `farever-mod.log` to that issue.
+  The v0.6.x stable rendering path uses DirectComposition through DXGI,
+  the part of the Windows graphics stack Proton's wined3d / vkd3d shims
+  cover least completely, so the stable build is unlikely to bring up
+  the overlay under Proton. The **v1.0.0 beta line** renders straight
+  into the game's own Direct3D 12 swap chain by default and skips the
+  DirectComposition layer entirely, which is the path most likely to
+  work under Proton / vkd3d. Grab the latest v1.0.0 prerelease (the
+  game-swapchain build) from the
+  [Releases page](https://github.com/ramisotti13-eng/farever-minimap/releases),
+  and whether it works or not please attach `farever-mod.log` to
+  [#45](https://github.com/ramisotti13-eng/farever-minimap/issues/45)
+  so we can confirm a working setup.
 
 * **Changing in-game resolution crashes the game** (v0.6.0). The
   overlay's swap chain doesn't survive the burst of `WM_SIZE`
