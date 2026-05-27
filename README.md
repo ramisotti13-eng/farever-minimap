@@ -46,17 +46,23 @@ attached.
 
 ## Which release do I download?
 
+**On Linux / Steam Play (Proton), use the v1.0.0 beta.** The stable
+v0.6.x build renders through DirectComposition, which does not work
+under Proton, so v0.6.3 will not bring up the overlay on Linux. Get
+this right before you download.
+
 Two builds on the [Releases page](../../releases):
 
-* **[v0.6.3](../../releases/latest)** — the current stable build, and
-  the default choice. Use this unless you want the newest features or
-  you are on Proton or an AMD-MPO setup.
-* **[v1.0.0 beta](../../releases)** — the next line, in preview. Grab
-  the latest `v1.0.0-betaN` prerelease. It renders into the game's own
-  Direct3D 12 swap chain by default (no DirectComposition), so it has
-  no desktop-compositor overhead, dodges the AMD MPO bug, and is the
-  candidate build for Proton / Steam Play (Linux). Same feature set as
-  the stable build, plus HPS tracking and custom minimap waypoints.
+* **[v0.6.3](../../releases/latest)** — current stable build,
+  **Windows only.** The default on Windows. Uses the DirectComposition
+  overlay path, which is not Proton-compatible.
+* **[v1.0.0 beta](../../releases)** — the next line, in preview, and
+  **the build for Linux / Proton.** Grab the latest `v1.0.0-betaN`
+  prerelease. It renders into the game's own Direct3D 12 swap chain by
+  default (no DirectComposition), so it runs under Proton / vkd3d, has
+  no desktop-compositor overhead, and dodges the AMD MPO bug. Same
+  feature set as the stable build, plus HPS tracking and custom minimap
+  waypoints. Windows users who want the newest features can run it too.
 
 Both carry the full feature set: minimap, DPS meter, plugin runtime,
 collectibles, Lua API. If a build does not bring up the overlay on your
