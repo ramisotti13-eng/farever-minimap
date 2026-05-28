@@ -1,7 +1,7 @@
 -- ==============================================================
 -- custom-waypoints-by-ispherz.lua
 -- Submitted by @IsPherz (local draft: issue-custom-waypoints-body.md)
--- Tested against farever-mod v0.6.3
+-- Tested against farever-mod v1.0.0-beta4
 -- License: MIT
 --
 -- Personal waypoint markers (plugin window): add at current position,
