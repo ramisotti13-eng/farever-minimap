@@ -7,15 +7,6 @@
 -- Personal waypoint markers (plugin window): add at current position,
 -- list/rename/delete, and heading nav arrow.
 --
--- Description / Notes
--- - Uses native waypoint API when available:
---     farever.waypoints.add/list/remove
--- - Falls back to local store-backed waypoints if native API is missing.
--- - Native waypoint fields currently exposed by the mod: id/name/x/y/z.
--- - Notes are plugin-local (stored in farever.store as waypoint_notes_blob).
--- - Native rename is emulated by remove+add at same coordinates.
--- - Arrow heading is based on character facing (farever.player.rot_z),
---   not camera direction.
 -- ==============================================================
 
 local PLUGIN_VERSION = "1.1.0"
