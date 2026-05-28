@@ -1,5 +1,5 @@
 -- ==============================================================
--- custom-waypoints-by-felip.lua
+-- custom-waypoints-by-ispherz.lua
 -- Submitted by @IsPherz (local draft: issue-custom-waypoints-body.md)
 -- Tested against farever-mod v0.6.3
 -- License: MIT

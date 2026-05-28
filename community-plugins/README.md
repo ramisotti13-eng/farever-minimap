@@ -64,14 +64,4 @@ breaks across game updates the original author is the right person to ping.
 | [`damage-calculator-by-iskrumpie.lua`](damage-calculator-by-iskrumpie.lua) | [@iSkrumpie](https://github.com/ramisotti13-eng/farever-minimap/pull/51) | PvE damage calculator using Aragon's verified formula: rating-to-% inputs (fervor, armor pen, crit), enemy armor presets, visual damage bars, dual-attribute scaling, +20-rating stat-gain analysis. "Import from player" button reads fervor, armor pen, crit and mastery live from the v0.6+ API. | v0.6.3 |
 | [`mob-codex-checker-by-ooshraxa.lua`](mob-codex-checker-by-ooshraxa.lua) | [Ooshraxa](https://github.com/ramisotti13-eng/farever-minimap/issues/44) | Floating widget that shows the codex completion of your current target as a red/yellow/green dot plus X/Y progress, via `farever.player.codex()`. Refreshes on the target_changed event. | v0.6.3 |
 | [`item-finder-by-iskrumpie.lua`](item-finder-by-iskrumpie.lua) | [@iSkrumpie](https://github.com/ramisotti13-eng/farever-minimap/pull/52) | Search every item, material and mob by name (FareverDB data, embedded). Shows drop tables, "dropped by" mob lists, crafting recipes, and a live compass nav arrow to the nearest ore/plant node. | v0.6.3 |
-| [`custom-waypoints-by-felip.lua`](custom-waypoints-by-felip.lua) | [@IsPherz](https://github.com/IsPherz) | Personal waypoint manager in plugin UI: add waypoint at current position, list/rename/delete, and heading nav arrow to selected point. Uses native waypoints API when available, with fallback to `farever.store`. | v0.6.3+ |
-
-### Notes for `custom-waypoints-by-felip.lua`
-
-- **Native backend detection:** if available, plugin uses `farever.waypoints.add/list/remove`; otherwise it falls back to local store-backed waypoints.
-- **Native API shape (current):** list entries expose `id`, `name`, `x`, `y`, `z`.
-- **Notes:** notes are local to the plugin (saved in `farever.store` as `waypoint_notes_blob` keyed by waypoint id), since native waypoints currently expose only `id/name/x/y/z`.
-- **Rename in native mode:** because there is no native rename method yet, rename is emulated by remove+add at the same coordinates.
-- **Facing limitation:** arrow heading is based on `farever.player.rot_z()` (character facing), not camera direction. If camera and character are misaligned, arrow direction follows character facing.
-- **UI storage:** plugin persists `show_arrow`, `arrow_only_mode`, `arrow_panel_offset_x`, `arrow_panel_offset_y`, and `selected_id` in `farever.store`.
-- **Arrow-only behavior:** when enabled, the plugin hides the regular management text/UI and renders only the arrow panel.
+| [`custom-waypoints-by-ispherz.lua`](custom-waypoints-by-ispherz.lua) | [@IsPherz](https://github.com/IsPherz) | Personal waypoint manager in plugin UI: add waypoint at current position, list/rename/delete, and heading nav arrow to selected point. Uses native waypoints API when available, with fallback to `farever.store`. | v0.6.3+ |
