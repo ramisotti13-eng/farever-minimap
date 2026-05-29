@@ -101,9 +101,6 @@ On first launch it asks how the overlay should draw. You choose once
   or if the game crashes in Fast mode. This is the same renderer the old
   v0.6.x builds used.
 
-The older **[v0.6.3](../../releases)** build is still on the Releases page as a
-Windows-only fallback (Compatibility renderer only), but v1.0.0 supersedes it.
-
 If a build does not bring up the overlay on your machine, open an issue and
 attach `farever-mod.log` from your Farever folder.
 
