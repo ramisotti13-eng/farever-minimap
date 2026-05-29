@@ -3,14 +3,43 @@
 ![Farever Minimap](minimap.gif)
 ![Farever DPS meter](dpsmeter.gif)
 
-A drop-in overlay for Farever (Shiro Games) with three tools in one DLL:
+> ## Please read this first
+>
+> This is an unofficial **mod**. It can crash, and when it does the trigger is
+> usually the game plus your GPU driver settings, not the mod reading state.
+>
+> **For the most stable experience, run Farever with default ("vanilla") GPU
+> driver settings:**
+>
+> * **No frame generation of any kind** for Farever: NVIDIA Smooth Motion,
+>   DLSS Frame Generation, AMD AFMF / Fluid Motion Frames, Lossless Scaling.
+>   Farever has no built-in frame generation, so a driver-injected one fights
+>   the overlay and can crash the game (`DXGI_ERROR_DEVICE_REMOVED`). If you
+>   want to keep frame gen on, pick **Compatibility** mode in the dialog on
+>   first launch (see [Which release](#which-release-do-i-download)), but
+>   turning it off is the cleaner fix.
+> * **No DSR / DLDSR** (dynamic super resolution), no forced VSync, no
+>   driver-level sharpening, anti-lag or "ultra low latency" overrides for
+>   Farever. Reset Farever to the global defaults in your NVIDIA / AMD control
+>   panel if in doubt.
+> * **Older Windows versions and older hardware can also crash.** The mod
+>   draws through Direct3D 12; very old GPUs or unpatched OS installs are more
+>   fragile here.
+>
+> If the mod or the game crashes, please open an issue and attach
+> `farever-mod.log` from your Farever folder. That log is the fastest way to
+> narrow the cause.
+
+A drop-in overlay for Farever (Shiro Games) with several tools in one DLL:
 
 * **Minimap**: compass with a heading arrow, world mosaic underneath,
   the POIs the game already tracks (obelisks, respawn points,
   dungeons, world activities, merchants), and 800+ optional
   collectible markers (chests, red orbs, plants, ores) you can
-  toggle in.
-* **DPS meter**: per-skill damage table with real in-game icons,
+  toggle in. Per-character "collected" tracking.
+* **Party**: when you are in a group, your party members show up on the
+  minimap and the compass with their live position.
+* **DPS / HPS meter**: per-skill damage table with real in-game icons,
   fight history, and combat-state tracking. Only counts the damage
   numbers the game itself shows above mobs, so other party members,
   ambient world damage and bleeds on you are out of the picture by
@@ -40,59 +69,55 @@ This overlay is read-only personal use exactly along those lines: it
 reads your own player state and draws on top of the game, nothing
 more (see [Notes](#notes) at the end).
 
-## Status (June 2026)
+## Status
 
-**v0.6.3 is the current stable build, and the v1.0.0 line is in beta.**
-The recurring `DX12Driver.present` access violation from the v0.5.x
-series (issues #41, #42, #43) was fixed in v0.6.0: the mod reads game
-state from its own background thread that is invisible to the game's
-garbage collector, instead of riding the game's render thread, which
-removes the class of race that was causing the mid-session crash.
+**v1.0.0 is the current stable build.** It unifies the older
+DirectComposition and swap-chain builds into a single DLL with a render-mode
+chooser, and carries the full feature set: minimap, party display, DPS + HPS
+meter, plugins, collectibles, and custom minimap waypoints.
 
-The **v1.0.0 beta** unifies the old DirectComposition and swap-chain
-builds into one DLL and renders straight into the game's own Direct3D 12
-swap chain by default. That removes the desktop-compositor overhead,
-dodges the AMD MPO bug, and is the candidate path for Proton / Steam
-Play (Linux). It carries the full feature set (minimap, DPS + HPS meter,
-plugins, collectibles, custom minimap waypoints).
+The `DX12Driver.present` access violation from the old v0.5.x series (issues
+#41, #42, #43) was fixed back in v0.6.0 by reading game state from a background
+thread that is invisible to the game's garbage collector, instead of riding the
+game's render thread. v1.0.0 keeps that and adds the two rendering paths under
+one roof (see below).
 
 If the mod crashes for you, please open an issue with `farever-mod.log`
 attached.
 
 ## Which release do I download?
 
-**On Linux / Steam Play (Proton), use the v1.0.0 beta.** The stable
-v0.6.x build renders through DirectComposition, which does not work
-under Proton, so v0.6.3 will not bring up the overlay on Linux. Get
-this right before you download.
+Get **[v1.0.0](../../releases/latest)**, the current stable build, for
+**Windows and Linux / Steam Play (Proton)**.
 
-Two builds on the [Releases page](../../releases):
+On first launch it asks how the overlay should draw. You choose once
+(changeable later in the overlay settings, restart to apply):
 
-* **[v0.6.3](../../releases/latest)** — current stable build,
-  **Windows only.** The default on Windows. Uses the DirectComposition
-  overlay path, which is not Proton-compatible.
-* **[v1.0.0 beta](../../releases)** — the next line, in preview, and
-  **the build for Linux / Proton.** Grab the latest `v1.0.0-betaN`
-  prerelease. It renders into the game's own Direct3D 12 swap chain by
-  default (no DirectComposition), so it runs under Proton / vkd3d, has
-  no desktop-compositor overhead, and dodges the AMD MPO bug. Same
-  feature set as the stable build, plus HPS tracking and custom minimap
-  waypoints. Windows users who want the newest features can run it too.
+* **Fast** (recommended): renders into the game's own Direct3D 12 swap
+  chain. Best performance, works on Windows and on Linux / Proton (vkd3d),
+  and dodges the AMD MPO bug. Pick this unless you have problems.
+* **Compatibility**: renders in a separate DirectComposition layer over the
+  game. Use this if you run frame generation (see the disclaimer at the top)
+  or if the game crashes in Fast mode. This is the same renderer the old
+  v0.6.x builds used.
 
-Both carry the full feature set: minimap, DPS meter, plugin runtime,
-collectibles, Lua API. If a build does not bring up the overlay on your
-machine, open an issue and attach `farever-mod.log` from your Farever
-folder.
+The older **[v0.6.3](../../releases)** build is still on the Releases page as a
+Windows-only fallback (Compatibility renderer only), but v1.0.0 supersedes it.
+
+If a build does not bring up the overlay on your machine, open an issue and
+attach `farever-mod.log` from your Farever folder.
 
 ## How to install
 
-1. Pick a release above and grab the matching `.zip`.
+1. Grab `farever-minimap-dps-1.0.0.zip` from the
+   [Releases page](../../releases/latest).
 2. Extract straight into your Farever folder, the one that contains
    `Farever.exe`. Typical Steam path:
    `C:\Program Files (x86)\Steam\steamapps\common\Farever`.
    You should end up with `dinput8.dll` and a `data\` folder sitting
    next to the game's executable.
-3. Launch Farever from Steam.
+3. Launch Farever from Steam. On the first launch you pick the render mode
+   (Fast / Compatibility), then restart the game once for it to take effect.
 
 There is no injector. Windows resolves `dinput8.dll` from the game
 folder before its own copy, so dropping the file next to
@@ -129,7 +154,8 @@ rim to wherever you like, see Layout below):
 
 * Pin: hold and drag to move the minimap around the screen
 * Square: cycles three sizes (small, medium, large)
-* Funnel: opens the POI filter panel
+* Funnel: opens the POI filter panel (also has the compass, party and
+  render-mode toggles)
 * Padlock: locks / unlocks the whole overlay layout
 * Key: opens the hotkey rebind window
 * Chest: toggles all four collectible categories at once
@@ -154,12 +180,27 @@ individually in the filter panel.
 To mark a chest or red orb as "done", **right-click it on the
 minimap**. The icon stays visible but dims, and the filter panel
 shows a "12 / 147" counter so completionists know how many are
-left. The done set is written to `data\poi_done.json` and persists
-across sessions. Plants and ores respawn, so they have no counter
-and can't be marked done.
+left. Plants and ores respawn, so they have no counter and can't be
+marked done.
+
+The "done" set is saved **per character**: each character gets its own
+`data\poi_done__<name>.json`, so a brand-new character starts with a fresh
+map instead of inheriting your main's collected state. When you update from
+an older build, your existing global progress carries over to the first
+character you log in on, and other characters start fresh from there.
 
 POI icons grow about 80% on mouse hover, which makes hitting the
 right one much easier when several are stacked.
+
+## Party
+
+When you are in a group, the other members show up as markers on the minimap
+and on the compass strip, with their live position updating as they move.
+A member only shows once their character is actually loaded on your client
+(in your zone / nearby); a party member in another zone has no position to
+draw until they are close again, because the game does not stream their
+character to you before then. Toggle the party display with the "Show party"
+checkbox in the filter panel.
 
 ## DPS meter
 
@@ -179,10 +220,14 @@ right one much easier when several are stacked.
   ground AoE, DOTs on you) is dropped before it reaches the meter,
   so the totals are exclusively your outgoing damage.
 
+* **HPS / healing**: the meter also tracks your healing output, with a
+  DMG / HEAL toggle and an HPS figure in the header. Fight history keeps
+  both per fight.
+
 * **Fight history**: a collapsible block under the live table shows
   the last 10 sealed fights, with time, duration, total damage and
   DPS for each. Click a row to open a detail window with the full
-  per-skill breakdown of that fight.
+  per-skill breakdown of that fight. History persists across restarts.
 
 * **Responsive layout**: as you shrink the DPS window, columns
   drop progressively (Crit%, Max, Hits, Total, %). At the narrowest
@@ -205,10 +250,10 @@ ready-to-use plugins:
 
 Plugins get sandboxed Lua 5.4. They can read your player position,
 DPS, in-combat flag, fight events, the equipped weapon and the full
-loadout, plus the current target and its cast bar. They can draw
-their own ImGui window with text, buttons, sliders, checkboxes,
-color pickers, combos, progress bars, and custom shapes for
-animated alerts and telegraphs. They can show centered
+loadout, the current target and its cast bar, the compass, and your
+party. They can draw their own ImGui window with text, buttons,
+sliders, checkboxes, color pickers, combos, progress bars, and custom
+shapes for animated alerts and telegraphs. They can show centered
 toast notifications, play system sounds, and persist per-plugin
 state to disk. They cannot touch game memory, network, the
 filesystem outside their own state, or other plugins' state. A bad
@@ -237,6 +282,12 @@ Drag your windows wherever once; they come back there next time.
 
 ## Troubleshooting
 
+**First, the cheap fixes:** if the game crashes, re-read the disclaimer at
+the top and make sure no frame generation / DSR / driver overrides are active
+for Farever. If the game crashes right at startup in Fast mode, set the render
+mode to **Compatibility** (overlay settings, or drop an empty
+`data\force_dcomp.flag` file next to `dinput8.dll` to force it), then restart.
+
 If the overlay starts hitching, F8 and F10 turn the two windows off
 independently. The mod also auto-disables itself if it detects the
 GPU stalling on the overlay for too long in a row, so you should
@@ -248,26 +299,30 @@ the new player Hero to spawn on the client and locks onto it as
 soon as the allocation comes through, which on slow loads can take
 a bit longer than the loading screen itself.
 
-If the overlay never appears at all, check `farever-mod.log` for
-`all composition swap chain variants failed`. That is the AMD MPO
-interaction, and the mod drops three auto-repair files into your
-Farever folder when this happens:
-`farever-fix-amd-overlay.reg` (double-click, accept the prompt,
-reboot), `farever-undo-amd-overlay-fix.reg` (rollback), and
-`OVERLAY_NOT_WORKING.txt` (plain-English step-by-step). If the .reg
-trick does not bring it up either, try the v1.0.0 beta: it renders
-into the game's own swap chain and skips the composition layer
-entirely, so the MPO interaction does not apply.
+In **Compatibility** mode, if the overlay never appears at all, check
+`farever-mod.log` for `all composition swap chain variants failed`. That is
+the AMD MPO interaction, and the mod drops three auto-repair files into your
+Farever folder when this happens: `farever-fix-amd-overlay.reg` (double-click,
+accept the prompt, reboot), `farever-undo-amd-overlay-fix.reg` (rollback), and
+`OVERLAY_NOT_WORKING.txt` (plain-English step-by-step). Switching to **Fast**
+mode skips the composition layer entirely, so the MPO interaction does not
+apply there.
 
 If the game crashes after a while, please zip the `farever-mod.log`
 file from your Farever folder and open an issue with it attached.
 Since 0.5.2 the previous session's log is kept as
 `farever-mod.log.1` after a restart, so you can grab both files
-even if you reproduce the crash and relaunch before uploading. The
-log records what the mod was doing at the moment of the crash and
-is the fastest way to narrow the cause.
+even if you reproduce the crash and relaunch before uploading.
 
 ## Compatibility notes
+
+* **Frame generation crashes Fast mode.** If you force NVIDIA Smooth Motion,
+  DLSS Frame Generation, AMD AFMF, or Lossless Scaling onto Farever, the
+  driver inserts its own frame between the game's rendered frame and present,
+  which collides with the overlay drawing into the same swap chain and removes
+  the GPU device (`DXGI_ERROR_DEVICE_REMOVED`). Use **Compatibility** mode if
+  you keep frame gen on, or, better, turn frame gen off for Farever (it has no
+  native support for it anyway).
 
 * **Not compatible with RivaTuner Statistics Server (RTSS) on the
   same game**, including MSI Afterburner's OSD which uses RTSS
@@ -275,18 +330,14 @@ is the fastest way to narrow the cause.
   device race and one of them eventually trips a GPU device-removed
   (DXGI `0x887A0005`). Workaround: in RTSS set "Application
   detection level" to None for `Farever.exe`, or use Steam's
-  built-in FPS counter instead, which is much more compatible with
-  composition overlays.
+  built-in FPS counter instead.
 
 * **Native-resolution exclusive fullscreen bypasses the overlay
-  (v0.6.x only).** Side-effect of how DWM presents to the display:
-  in exclusive fullscreen the game's swap chain flips straight to
-  the GPU scanout and DWM is not in the loop, so our composition
-  layer is invisible. Use borderless windowed instead. Most monitor
-  + GPU combos run borderless at essentially the same framerate as
-  exclusive these days. The v1.0.0 beta doesn't have this problem in
-  its default mode because it renders directly into the game's own
-  swap chain, no composition layer involved.
+  (Compatibility mode only).** In exclusive fullscreen the game's swap chain
+  flips straight to the GPU scanout and DWM is not in the loop, so the
+  composition layer is invisible. Use borderless windowed instead, or switch
+  to **Fast** mode, which renders into the game's own swap chain and does not
+  have this problem.
 
 * **Holding ALT plus left mouse button on an overlay window can
   trigger auto-attack when ALT is released**
@@ -308,40 +359,20 @@ is the fastest way to narrow the cause.
 * **Alt-tab game crash since the v0.1.5.25921 patch.** Some users
   hit an access violation in the game's own DX12 renderer
   (`h3d.impl.DX12Driver.present`) after a long foreground loss
-  followed by returning to the game. Pattern: alt-tab to Discord /
-  browser / Steam overlay for several seconds, come back, the game
-  crashes within a few frames. The mod is not the cause: when this
-  happens the mod's own ticks (`damage`, `hero_state`, `overlay
-  alive`) keep firing cleanly while the game's render thread dies.
-  On a few setups the timing is still reproducible. Workarounds:
-  hide the overlay (default F7) before alt-tabbing, switch to
-  borderless windowed if you are in exclusive fullscreen, or try
-  the opt-in `data/fg_detach.flag` and `data/cursor_park.flag`
-  flags (drop empty files of those names into your Farever folder
-  next to `dinput8.dll`, restart). Filed upstream as a game-side
-  issue; nothing we can fix from the mod's side directly.
-
-* **Proton / Steam Play (Linux): try the v1.0.0 beta**
-  ([#45](https://github.com/ramisotti13-eng/farever-minimap/issues/45)).
-  The v0.6.x stable rendering path uses DirectComposition through DXGI,
-  the part of the Windows graphics stack Proton's wined3d / vkd3d shims
-  cover least completely, so the stable build is unlikely to bring up
-  the overlay under Proton. The **v1.0.0 beta line** renders straight
-  into the game's own Direct3D 12 swap chain by default and skips the
-  DirectComposition layer entirely, which is the path most likely to
-  work under Proton / vkd3d. Grab the latest v1.0.0 prerelease (the
-  game-swapchain build) from the
-  [Releases page](https://github.com/ramisotti13-eng/farever-minimap/releases),
-  and whether it works or not please attach `farever-mod.log` to
-  [#45](https://github.com/ramisotti13-eng/farever-minimap/issues/45)
-  so we can confirm a working setup.
+  followed by returning to the game. The mod is not the cause: when this
+  happens the mod's own ticks keep firing cleanly while the game's render
+  thread dies. Workarounds: hide the overlay (default F7) before
+  alt-tabbing, switch to borderless windowed if you are in exclusive
+  fullscreen, or try the opt-in `data/fg_detach.flag` and
+  `data/cursor_park.flag` flags (drop empty files of those names into your
+  Farever folder, restart). Filed upstream as a game-side issue.
 
 * **Rapidly changing in-game resolution can crash the game.**
   Mitigated since v0.6.1, but cycling resolutions quickly can still
-  push the overlay's swap chain into a `DEVICE_REMOVED` state and
-  take the game's own render path down with it (an adapter-wide
-  driver error). Safest is to quit to the launcher before changing
-  resolution, then restart Farever.
+  push the swap chain into a `DEVICE_REMOVED` state and take the
+  game's own render path down with it (an adapter-wide driver error).
+  Safest is to quit to the launcher before changing resolution, then
+  restart Farever.
 
 ## Contributors
 
@@ -357,9 +388,9 @@ Thanks for sharing your work. Want your plugin listed here? See the
 ## Notes
 
 The mod is read only. It reads your own player state out of the
-game process and renders its own swap chain on top of Direct3D 12.
-It does not write to game memory, it does not touch the network,
-and it does not look at other players' positions or damage.
+game process and renders on top of Direct3D 12. It does not write to
+game memory, it does not touch the network, and other players'
+positions are read only for your own party display, nothing else.
 
 This is fan made and is not affiliated with Shiro Games. All
 Farever assets remain the property of their respective owners; the
