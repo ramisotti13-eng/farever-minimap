@@ -378,6 +378,7 @@ written and shared by players of the mod:
 
 * [@iSkrumpie](https://github.com/iSkrumpie) — POI finder, PvE damage calculator, item finder
 * [Ooshraxa](https://github.com/KaareGravesen) — mob codex checker
+* [@Mupki](https://github.com/Mupki) — combat logger
 
 Thanks for sharing your work. Want your plugin listed here? See the
 [community-plugins README](community-plugins/README.md).
