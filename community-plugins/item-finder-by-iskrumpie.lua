@@ -1,7 +1,7 @@
 -- ==============================================================
 -- item-finder-by-iskrumpie.lua
 -- Submitted by @iSkrumpie
--- Tested against farever-mod v0.5.6.1
+-- Tested against farever-mod v1.1.1
 -- License: MIT
 --
 -- Search every item, material and mob in the game by name.
@@ -25,6 +25,12 @@
 --   + Mob detail   -- level, type, zone; drop list; [->] jumps to item
 --   + hero_locked event clears nav on zone transitions
 --   + Search query + filter tab persisted via farever.store
+--
+-- v1.2.0 (2026-06-01):
+--   + Back navigation: [->] in mob drops pushes to history;
+--     [< Back] button returns to previous view (max 5 levels deep)
+--   + Mob detail: codex progress shown when player is locked
+--     (farever.player.codex() API, requires mod v0.6.1+)
 -- ==============================================================
 
 -- ── embedded data ─────────────────────────────────────────────────────────────────────────────
@@ -1816,6 +1822,7 @@ local state = {
   nav_poi     = nil,       -- poi object currently shown in the nav panel
   pois_cache  = nil,       -- farever.pois() result cached for 4 s
   pois_t      = 0,         -- farever.now() at last pois_cache fill
+  nav_stack   = {},        -- [{tp, id}] back-navigation history (max 5 entries)
 }
 
 -- ── search index ───────────────────────────────────────────────────────────────────────
@@ -2231,6 +2238,19 @@ local function render_unit_detail(unit_id)
     "  lv " .. u.lv .. "  \xc2\xb7 " .. u.tp ..
     "  \xc2\xb7 " .. (u.zname ~= "" and u.zname or u.zn))
 
+  -- Codex progress (farever.player.codex() API, mod v0.6.1+)
+  if farever.player.locked() then
+    local c = farever.player.codex(unit_id)
+    if c then
+      local cs_r, cs_g, cs_b
+      if     c.completed          then cs_r,cs_g,cs_b = 0.3,1.0,0.3
+      elseif c.state == "partial" then cs_r,cs_g,cs_b = 1.0,0.85,0.2
+      else                             cs_r,cs_g,cs_b = 0.5,0.5,0.5 end
+      imgui.text_colored(cs_r,cs_g,cs_b,1, string.format(
+        "  Codex: %d / %d  (%s)", c.progress, c.max, c.state))
+    end
+  end
+
   -- Dungeon location (if known)
   if u.dg and u.dg ~= "" then
     local dn = DUNGEON_DISPLAY[u.dg] or u.dg
@@ -2255,6 +2275,10 @@ local function render_unit_detail(unit_id)
     elseif d.c <  5  then dr,dg,db = 0.9,0.5,0.3 end
     -- [->] jumps the search field to this item and selects it
     if imgui.button("[->]##drop_" .. d.i) then
+      -- push current mob to back-stack before jumping to item
+      if #state.nav_stack < 5 then
+        state.nav_stack[#state.nav_stack+1] = {tp=state.sel_type, id=state.sel_id}
+      end
       state.search = dn
       farever.store.set("if_search", dn)
       do_search(dn)
@@ -2291,20 +2315,22 @@ function on_render()
   -- search row
   local new_q = imgui.input_text("##ifsearch", state.search)
   if new_q ~= state.search then
-    state.search   = new_q
-    state.sel_type = nil
-    state.sel_id   = nil
-    state.nav_poi  = nil
+    state.search    = new_q
+    state.sel_type  = nil
+    state.sel_id    = nil
+    state.nav_poi   = nil
+    state.nav_stack = {}
     farever.store.set("if_search", new_q)
     do_search(new_q)
   end
   imgui.same_line()
   if imgui.button("X##ifclear") then
-    state.search   = ""
-    state.results  = {}
-    state.sel_type = nil
-    state.sel_id   = nil
-    state.nav_poi  = nil
+    state.search    = ""
+    state.results   = {}
+    state.sel_type  = nil
+    state.sel_id    = nil
+    state.nav_poi   = nil
+    state.nav_stack = {}
     farever.store.set("if_search", "")
   end
 
@@ -2333,6 +2359,7 @@ function on_render()
         imgui.text_colored(0.3,1,0.6,1, "> " .. prefix .. e.nm)
       else
         if imgui.button(prefix .. e.nm .. "##ifr_" .. e.tp .. e.id) then
+          state.nav_stack = {}   -- fresh navigation from search list
           select_entry(e.tp, e.id)
         end
       end
@@ -2343,7 +2370,18 @@ function on_render()
     imgui.separator()
   end
 
-  -- detail panel
+  -- detail panel: back-navigation button + entry renderer
+  if state.sel_type and #state.nav_stack > 0 then
+    local prev = state.nav_stack[#state.nav_stack]
+    local prev_nm = (prev.tp == "item" and DB.items[prev.id] and DB.items[prev.id].n)
+                 or (prev.tp == "unit" and DB.units[prev.id] and DB.units[prev.id].n)
+                 or "?"
+    if imgui.button("[< Back] " .. prev_nm:sub(1, 26)) then
+      table.remove(state.nav_stack)
+      select_entry(prev.tp, prev.id)
+    end
+    imgui.separator()
+  end
   if     state.sel_type == "item" then render_item_detail(state.sel_id)
   elseif state.sel_type == "unit" then render_unit_detail(state.sel_id)
   elseif state.search == "" then
@@ -2361,5 +2399,6 @@ function on_event(name, data)
     state.nav_poi     = nil
     state.detail_pois = {}
     state.pois_cache  = nil
+    state.nav_stack   = {}
   end
 end

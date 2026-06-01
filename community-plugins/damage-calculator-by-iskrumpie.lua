@@ -1,23 +1,30 @@
 -- ==============================================================
 -- damage-calculator-by-iskrumpie.lua
 -- Submitted by @iSkrumpie  (https://github.com/ramisotti13-eng/farever-minimap/pull/51)
--- Tested against farever-mod v0.6.3
+-- Tested against farever-mod v1.1.1
 -- License: MIT
 --
 -- PvE damage calculator using Aragon's verified formula — rating inputs,
 -- enemy armor presets, visual bars, stat gain analysis, dual-attribute support.
+--
+-- v1.3.0 (2026-06-01):
+--   + Balance patch: Crit formula /1250 → /1555 (every 15.56 rating = 1%)
+--   + Base crit 5.7% added as universal character constant
+--   + Stat gain: absolute avg-dmg delta (+X.X avg) shown alongside %
+--   + Stat gain: +20 Attribute simulation added
 -- ==============================================================
 -- Based on Aragon's formula: https://www.youtube.com/watch?v=zcIMQjmQXlI
 
 -- ── constants ─────────────────────────────────────────────────────────────────
-local NAV_W   = 360          -- forces window content width (see dummy below)
-local DEF_MOD = 2285.0       -- game defense scaling constant (Aragon verified)
-local GAIN_SIM = 20          -- rating delta used in stat-gain analysis
+local NAV_W    = 360          -- forces window content width (see dummy below)
+local DEF_MOD  = 2285.0       -- game defense scaling constant (Aragon verified)
+local GAIN_SIM = 20           -- delta used in gain-analysis simulation (ratings + attr)
+local BASE_CRIT = 5.7         -- base crit % all characters have (confirmed balance patch 2026-06)
 
 -- ── rating → % converters ─────────────────────────────────────────────────────
 local function fervor_pct(r)    return r / 15.0 end
 local function armor_pen_pct(r) return math.min(r / 6.0, 100.0) end
-local function crit_pct(r)      return r / 12.5 end
+local function crit_pct(r)      return r * 100.0 / 1555.0 end   -- PATCHED: was r/12.5 (/1250)
 
 -- ── damage formula ────────────────────────────────────────────────────────────
 -- All *_p arguments are actual % values (5.8, not 0.058).
@@ -46,7 +53,8 @@ end
 -- Wrapper: takes raw ratings, converts, calls compute()
 local function compute_r(w, sm, a1, a2, fr, mast, apr, cr, cb, b1, b2, armor)
     return compute(w, sm, a1, a2,
-                   fervor_pct(fr), mast, armor_pen_pct(apr), crit_pct(cr),
+                   fervor_pct(fr), mast, armor_pen_pct(apr),
+                   BASE_CRIT + crit_pct(cr),   -- total = 5.7% base + rating-derived
                    cb, b1, b2, armor)
 end
 
@@ -143,14 +151,14 @@ local function draw_damage_bar(label, value, max_val, r, g, b)
     imgui.dummy(NAV_W, bar_h + 2)
 end
 
--- Stat gain row: label, gain%, optional "◀ best" marker.
-local function draw_gain_row(label, gain_pct, is_best)
+-- Stat gain row: label, absolute avg-dmg delta, gain%, optional "◀ best" marker.
+local function draw_gain_row(label, abs_dmg, gain_pct, is_best)
     if is_best then
         imgui.text_colored(1.0, 0.85, 0.20, 1.0,
-            string.format("  %-12s  %+.2f%%  ◀ best", label, gain_pct))
+            string.format("  %-13s  %+5.1f avg  %+.2f%%  ◀ best", label, abs_dmg, gain_pct))
     else
         imgui.text_colored(0.55, 0.55, 0.55, 1.0,
-            string.format("  %-12s  %+.2f%%", label, gain_pct))
+            string.format("  %-13s  %+5.1f avg  %+.2f%%", label, abs_dmg, gain_pct))
     end
 end
 
@@ -221,8 +229,10 @@ function on_render()
     drag(string.format("Armor pen rating    → %5.1f%%  (6 pts = 1%%)",
          armor_pen_pct(s.armor_pen_r)), "armor_pen_r", 1.0, 0.0, 600.0)
 
-    drag(string.format("Crit chance rating  → %5.1f%%  (12.5 pts = 1%%)",
-         crit_pct(s.crit_r)), "crit_r", 1.0, 0.0, 1250.0)
+    drag(string.format("Crit chance rating  → %5.1f%% total  (15.56 pts = 1%%)",
+         BASE_CRIT + crit_pct(s.crit_r)), "crit_r", 1.0, 0.0, 1555.0)
+    imgui.text_colored(0.42, 0.42, 0.42, 1.0,
+        string.format("  base %.1f%% + rating  (balance patch 2026-06)", BASE_CRIT))
 
     drag("Crit bonus %  (150% = 1.5x normal, i.e. +50%)",
          "crit_bonus", 0.1, 100.0, 500.0)
@@ -307,7 +317,7 @@ function on_render()
 
     -- ── STAT GAIN ANALYSIS ────────────────────────────────────────────────────
     imgui.text_colored(0.75, 0.75, 1.0, 1.0,
-        string.format("Stat Gain  (+%d rating each vs current)", GAIN_SIM))
+        string.format("Stat Gain  (+%d each: ratings | attribute)", GAIN_SIM))
 
     local function sim_avg(key, delta)
         local sc = {}
@@ -320,15 +330,17 @@ function on_render()
     end
 
     local gains = {
-        { label = "Fervor",    key = "fervor_r",    gain = 0 },
-        { label = "Armor Pen", key = "armor_pen_r", gain = 0 },
-        { label = "Crit",      key = "crit_r",      gain = 0 },
+        { label = "Fervor",    key = "fervor_r",    gain = 0, abs = 0 },
+        { label = "Armor Pen", key = "armor_pen_r", gain = 0, abs = 0 },
+        { label = "Crit",      key = "crit_r",      gain = 0, abs = 0 },
+        { label = "Attribute", key = "attr1",        gain = 0, abs = 0 },
     }
-    local best_i   = 1
+    local best_i    = 1
     local best_gain = -math.huge
 
     for i, g in ipairs(gains) do
         local new_avg = sim_avg(g.key, GAIN_SIM)
+        g.abs  = new_avg - avg
         g.gain = avg > 0 and ((new_avg - avg) / avg * 100.0) or 0.0
         if g.gain > best_gain then
             best_gain = g.gain
@@ -337,7 +349,7 @@ function on_render()
     end
 
     for i, g in ipairs(gains) do
-        draw_gain_row(g.label, g.gain, i == best_i)
+        draw_gain_row(g.label, g.abs, g.gain, i == best_i)
     end
 
     imgui.separator()
