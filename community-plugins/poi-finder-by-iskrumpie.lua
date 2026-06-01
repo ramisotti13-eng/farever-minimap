@@ -1,6 +1,6 @@
 -- ============================================================
--- POI Finder v2 — by @iSkrumpie
--- Tested against: farever-mod v0.6.3
+-- POI Finder v2.2 — by @iSkrumpie
+-- Tested against: farever-mod v1.1.1
 -- License: MIT
 --
 -- v2.0.0 (2026-05-22):
@@ -14,6 +14,11 @@
 --   + Arrow panel toggle (enable/disable via checkbox)
 --   + subkind label — ore/plant rows show the resource type
 --   + hero_locked event clears the lock on zone transitions
+--
+-- v2.2.0 (2026-06-01):
+--   + Sort by true 3D distance (√XY²+Δz²) instead of
+--     same-level priority + XY-only — nearest POI always first
+--   + Radius slider replaced with drag_float for finer control
 --
 -- v2.1.0 (2026-05-22):
 --   + Manual "collected" tracking — [✓] button on each row
@@ -277,7 +282,7 @@ function on_render()
 
     -- ── settings controls ─────────────────────────────────────────────────
     local nv, ch
-    nv, ch = imgui.slider_float("Radius (m)", radius, 20, 500)
+    nv, ch = imgui.drag_float("Radius (m)", radius, 1.0, 20, 500)
     if ch then radius = nv; farever.store.set("radius", radius) end
 
     imgui.spacing()
@@ -324,6 +329,7 @@ function on_render()
             if d2 <= r2 then
                 local xyd = math.sqrt(d2)
                 local dz  = p.z - pz
+                local d3  = math.sqrt(d2 + dz * dz)
                 local entry = {
                     id    = p.id,
                     x     = p.x,
@@ -331,6 +337,7 @@ function on_render()
                     z     = p.z,
                     dz    = dz,
                     xyd   = xyd,
+                    d3    = d3,
                     label = kind_label(p.kind, p.subkind, p.name),
                     kind  = p.kind,
                 }
@@ -343,12 +350,9 @@ function on_render()
         end
     end
 
-    -- sort: same-level first, then by XY distance
+    -- sort: nearest 3D distance first (sqrt(dx²+dy²+dz²))
     local function sort_fn(a, b)
-        local al = math.abs(a.dz) < 3
-        local bl = math.abs(b.dz) < 3
-        if al ~= bl then return al end
-        return a.xyd < b.xyd
+        return a.d3 < b.d3
     end
     table.sort(nearby,     sort_fn)
     table.sort(nearby_ign, sort_fn)
