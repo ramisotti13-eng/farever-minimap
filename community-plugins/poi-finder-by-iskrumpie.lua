@@ -1,6 +1,6 @@
 -- ============================================================
--- POI Finder v2 — by @iSkrumpie
--- Tested against: farever-mod v0.6.3
+-- POI Finder v2.2 — by @iSkrumpie
+-- Tested against: farever-mod v1.1.1
 -- License: MIT
 --
 -- v2.0.0 (2026-05-22):
@@ -14,6 +14,15 @@
 --   + Arrow panel toggle (enable/disable via checkbox)
 --   + subkind label — ore/plant rows show the resource type
 --   + hero_locked event clears the lock on zone transitions
+--
+-- v2.2.0 (2026-06-01):
+--   + Sort by true 3D distance (√XY²+Δz²) instead of
+--     same-level priority + XY-only — nearest POI always first
+--   + Radius slider replaced with drag_float for finer control
+--
+-- v2.3.0 (2026-06-01):
+--   + Waypoint integration: locking a POI pins a minimap waypoint;
+--     unlocking or zone transition removes it (farever.waypoints API)
 --
 -- v2.1.0 (2026-05-22):
 --   + Manual "collected" tracking — [✓] button on each row
@@ -35,6 +44,23 @@ local ignored_set    = {}    -- set: { [id_str] = true } — persisted as store 
 
 local MAX_ROWS = 12
 local NAV_W    = 360   -- panel + dummy width; forces window to this content width
+
+-- ── waypoint helpers (farever.waypoints API, v1.0+) ──────────────────────────────
+local WP_PREFIX = "POI:"   -- namespace prefix; avoids colliding with user waypoints
+
+local function wp_set(label, x, y, z)
+    if farever.waypoints and farever.waypoints.add then
+        pcall(farever.waypoints.remove, WP_PREFIX .. label)   -- clear stale first
+        pcall(farever.waypoints.add, x, y, z, WP_PREFIX .. label)
+    end
+end
+
+local function wp_clear()
+    -- selected_cache holds the locked POI label; safe to call even when nil
+    if farever.waypoints and farever.waypoints.remove and selected_cache then
+        pcall(farever.waypoints.remove, WP_PREFIX .. selected_cache.label)
+    end
+end
 
 -- ── ignored-set helpers ───────────────────────────────────────────────────────
 
@@ -60,6 +86,7 @@ local function ignore_poi(id)
     save_ignored()
     -- clear lock if the locked POI is now ignored
     if selected_id and tostring(selected_id) == tostring(id) then
+        wp_clear()
         selected_id    = nil
         selected_cache = nil
     end
@@ -92,7 +119,8 @@ end
 
 function on_event(name, data)
     if name == "hero_locked" then
-        -- new zone / new session — clear the directional lock
+        -- new zone / new session — clear the directional lock and minimap waypoint
+        wp_clear()
         selected_id    = nil
         selected_cache = nil
     end
@@ -277,7 +305,7 @@ function on_render()
 
     -- ── settings controls ─────────────────────────────────────────────────
     local nv, ch
-    nv, ch = imgui.slider_float("Radius (m)", radius, 20, 500)
+    nv, ch = imgui.drag_float("Radius (m)", radius, 1.0, 20, 500)
     if ch then radius = nv; farever.store.set("radius", radius) end
 
     imgui.spacing()
@@ -324,6 +352,7 @@ function on_render()
             if d2 <= r2 then
                 local xyd = math.sqrt(d2)
                 local dz  = p.z - pz
+                local d3  = math.sqrt(d2 + dz * dz)
                 local entry = {
                     id    = p.id,
                     x     = p.x,
@@ -331,6 +360,7 @@ function on_render()
                     z     = p.z,
                     dz    = dz,
                     xyd   = xyd,
+                    d3    = d3,
                     label = kind_label(p.kind, p.subkind, p.name),
                     kind  = p.kind,
                 }
@@ -343,12 +373,9 @@ function on_render()
         end
     end
 
-    -- sort: same-level first, then by XY distance
+    -- sort: nearest 3D distance first (sqrt(dx²+dy²+dz²))
     local function sort_fn(a, b)
-        local al = math.abs(a.dz) < 3
-        local bl = math.abs(b.dz) < 3
-        if al ~= bl then return al end
-        return a.xyd < b.xyd
+        return a.d3 < b.d3
     end
     table.sort(nearby,     sort_fn)
     table.sort(nearby_ign, sort_fn)
@@ -404,7 +431,7 @@ function on_render()
         imgui.separator()
         if selected_id then
             if imgui.button("Clear lock") then
-                selected_id = nil; selected_cache = nil
+                wp_clear(); selected_id = nil; selected_cache = nil
             end
             imgui.same_line()
         end
@@ -431,11 +458,14 @@ function on_render()
         -- Row select button
         if imgui.button(tostring(i) .. ".") then
             if is_sel then
+                wp_clear()
                 selected_id    = nil
                 selected_cache = nil
             else
+                wp_clear()   -- remove any previous lock's waypoint first
                 selected_id    = p.id
                 selected_cache = { x=p.x, y=p.y, z=p.z, label=p.label }
+                wp_set(p.label, p.x, p.y, p.z)
             end
         end
         imgui.same_line()
@@ -514,7 +544,7 @@ function on_render()
     imgui.separator()
     if selected_id then
         if imgui.button("Clear lock") then
-            selected_id = nil; selected_cache = nil
+            wp_clear(); selected_id = nil; selected_cache = nil
         end
         imgui.same_line()
     end
