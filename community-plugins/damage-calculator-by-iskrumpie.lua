@@ -1,12 +1,16 @@
 -- ==============================================================
 -- damage-calculator-by-iskrumpie.lua
 -- Submitted by @iSkrumpie  (https://github.com/ramisotti13-eng/farever-minimap/pull/51)
--- Tested against farever-mod v1.1.1
+-- Tested against farever-mod v1.1.5
 -- License: MIT
 --
 -- PvE damage calculator using Aragon's verified formula — rating inputs,
 -- enemy armor presets, visual bars, stat gain analysis, dual-attribute support.
 --
+-- v1.4.0 (2026-06-08):
+--   + Live attribute import: [STR] [DEX] [FAI] [INT] buttons next to attr inputs
+--   + Live ratings import: "Import from character" fills fervor/pen/crit/mastery
+--     (requires farever-minimap v1.1.5 — attribute getters now return live values)
 -- v1.3.0 (2026-06-01):
 --   + Balance patch: Crit formula /1250 → /1555 (every 15.56 rating = 1%)
 --   + Base crit 5.7% added as universal character constant
@@ -202,12 +206,45 @@ function on_render()
     drag("Weapon base dmg  (the \"36\" in tooltip)",   "weapon",    0.5, 0.0, 10000.0)
     drag("Skill mod %      (the \"78.75%\" in tooltip)", "skill_mod", 0.1, 0.0,  1000.0)
     drag("Attribute value  (your STR/DEX/INT/FAI)",    "attr1",     0.5, 0.0,  1000.0)
+    -- v1.1.5+: attribute getters now return live values
+    if farever.player.locked() then
+        local live_attrs = {
+            {"STR", farever.player.strength()},
+            {"DEX", farever.player.dexterity()},
+            {"FAI", farever.player.faith()},
+            {"INT", farever.player.intellect()},
+        }
+        imgui.text_colored(0.42, 0.42, 0.42, 1.0, "  Live:")
+        imgui.same_line()
+        for i, a in ipairs(live_attrs) do
+            if imgui.button(string.format("%s %.0f", a[1], a[2])) then
+                s.attr1 = a[2]; changed = true
+            end
+            if i < 4 then imgui.same_line() end
+        end
+    end
 
     -- dual-attribute toggle
     local da, dc = imgui.checkbox("Dual-scaling skill  (e.g. FAI + INT)", s.dual_attr)
     if dc then s.dual_attr = da; changed = true end
     if s.dual_attr then
         drag("Attribute 2  (second stat value)", "attr2", 0.5, 0.0, 1000.0)
+        if farever.player.locked() then
+            local live_attrs2 = {
+                {"STR", farever.player.strength()},
+                {"DEX", farever.player.dexterity()},
+                {"FAI", farever.player.faith()},
+                {"INT", farever.player.intellect()},
+            }
+            imgui.text_colored(0.42, 0.42, 0.42, 1.0, "  Live:")
+            imgui.same_line()
+            for i, a in ipairs(live_attrs2) do
+                if imgui.button(string.format("%s %.0f##2", a[1], a[2])) then
+                    s.attr2 = a[2]; changed = true
+                end
+                if i < 4 then imgui.same_line() end
+            end
+        end
     else
         s.attr2 = 0.0
     end
@@ -216,6 +253,18 @@ function on_render()
 
     -- ── CHARACTER RATINGS ─────────────────────────────────────────────────────
     imgui.text_colored(0.75, 0.75, 1.0, 1.0, "Character Ratings")
+    -- one-click import from live character sheet (v1.1.5+)
+    if farever.player.locked() then
+        if imgui.button("Import from character") then
+            s.fervor_r    = farever.player.fervor() * 15.0
+            s.armor_pen_r = math.min(farever.player.armor_penetration() * 6.0, 600.0)
+            s.crit_r      = math.max(0.0, farever.player.crit_chance() - BASE_CRIT) * 15.55
+            s.crit_bonus  = farever.player.crit_damage()
+            s.mastery     = farever.player.physical_mastery()
+            changed = true
+            farever.toast("Ratings imported  (mastery = phys; swap to magic if needed)")
+        end
+    end
     imgui.text_colored(0.42, 0.42, 0.42, 1.0,
         "  Enter the rating number from your stat page (not the %)")
 
