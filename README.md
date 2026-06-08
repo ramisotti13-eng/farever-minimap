@@ -207,14 +207,20 @@ rim to wherever you like, see Layout below):
 
 * Pin: hold and drag to move the minimap around the screen
 * Square: cycles three sizes (small, medium, large)
-* Funnel: opens the options / POI filter panel (compass, party and
+* Gear: opens the options / POI filter panel (compass, party and
   render-mode toggles live here too); the panel is its own draggable window
 * Padlock: locks / unlocks the whole overlay layout
 * Key: opens the hotkey rebind window
 * Chest: toggles all four collectible categories at once
-* Plus and Minus: zoom between roughly 10x and 20x
+* Plus and Minus: zoom the minimap in and out (roughly 3x to 20x). Your
+  zoom level is remembered between sessions
+* Expand (four outward arrows): jumps straight out to a full-zone
+  overview so you can see the whole area at once, handy for tracking down
+  the last collectibles; click it again to snap back to your previous zoom
 * Minus on top: shrinks the minimap to a small puck; click the puck
   to expand it again
+
+Hovering any bezel button shows a short tooltip of what it does.
 
 The DPS window has a custom padlock toggle at the very start of the
 status line that does the same job as the bezel padlock. Clicking
@@ -231,7 +237,7 @@ looking down at the minimap.
 
 By default it follows your **camera**, which makes turning with the mouse feel
 natural. If you prefer it to follow your **character's facing** instead, flip the
-"Compass follows camera" toggle in the options panel (funnel button on the
+"Compass follows camera" toggle in the options panel (gear button on the
 minimap bezel).
 
 ## Collectibles
@@ -246,6 +252,12 @@ To mark a chest or red orb as "done", **right-click it on the
 minimap**. The icon stays visible but dims, and the panel shows a
 "12 / 147" counter so completionists know how many are left. Plants
 and ores respawn, so they have no counter and can't be marked done.
+
+When collectibles are shown, the minimap also draws a small arrow on its
+rim pointing at the **nearest one you haven't collected yet**, together
+with its distance in meters, which makes tracking down the last chest or
+orb of an area much quicker. Toggle the arrow off in the options panel if
+you don't want it.
 
 The "done" set is saved **per character**: each character gets its own
 `poi_done__<name>.json` in your settings folder, so a brand-new character
@@ -432,20 +444,21 @@ even if you reproduce the crash and relaunch before uploading.
   to **Fast** mode, which renders into the game's own swap chain and does not
   have this problem.
 
-* **Holding ALT plus left mouse button on an overlay window can
-  trigger auto-attack when ALT is released**
-  ([#19](https://github.com/ramisotti13-eng/farever-minimap/issues/19)).
-  ImGui captures the LMB-down on the overlay so the game's wndproc
-  never sees it. When you release ALT, Farever switches to camera
-  mode and polls the physical LMB state via raw input, which still
-  reports LMB as held, which in camera mode reads as a continuous
-  attack. Workarounds: release LMB before pressing ALT, or hide
-  the overlay with F7 while playing actively and toggle it back on
-  when you want to read the minimap or DPS numbers.
+* **Auto-attack getting stuck after clicking an overlay UI element**
+  ([#19](https://github.com/ramisotti13-eng/farever-minimap/issues/19),
+  [#84](https://github.com/ramisotti13-eng/farever-minimap/issues/84)).
+  When the overlay swallowed a mouse click on one of its own widgets,
+  the game could be left thinking the button was still held and keep
+  auto-attacking until your next click. **Fixed in v1.1.6:** the overlay
+  now routes a matching button release to the game for every click it
+  intercepts, so the game never sees a press without a release. If you
+  are on an older build or ever still hit it, hide the overlay with F7
+  while actively fighting and toggle it back on to read the minimap or
+  DPS numbers.
 
 * **Big monitors (4K and up) need a UI scale bump.**
   Default text size is tuned for 1080p / 1440p. On 4K + large display
-  open the options panel (funnel button on the minimap bezel) and use
+  open the options panel (gear button on the minimap bezel) and use
   the "UI scale (text)" slider, 2.0x to 2.5x is usually right for
   a 48 inch 4K display.
 
