@@ -7,10 +7,19 @@
 -- PvE damage calculator using Aragon's verified formula — rating inputs,
 -- enemy armor presets, visual bars, stat gain analysis, dual-attribute support.
 --
+-- v1.4.1 (2026-06-09):
+--   ! Removed "Import from character" button for ratings.
+--     v1.1.5 only fixed the four primary attribute getters
+--     (strength/dexterity/faith/intellect) + max_health. The secondary stats
+--     used by the ratings import (fervor, armor_penetration, physical_mastery,
+--     crit_chance, crit_damage) still return base/class-default values from
+--     the engine layer, which would have overwritten correctly typed ratings
+--     with zeros. Use the stat page for ratings until the deeper read lands.
+--     Review thread: https://github.com/ramisotti13-eng/farever-minimap/pull/82
 -- v1.4.0 (2026-06-08):
 --   + Live attribute import: [STR] [DEX] [FAI] [INT] buttons next to attr inputs
---   + Live ratings import: "Import from character" fills fervor/pen/crit/mastery
 --     (requires farever-minimap v1.1.5 — attribute getters now return live values)
+--   - "Import from character" button: removed in v1.4.1 (see above)
 -- v1.3.0 (2026-06-01):
 --   + Balance patch: Crit formula /1250 → /1555 (every 15.56 rating = 1%)
 --   + Base crit 5.7% added as universal character constant
@@ -252,19 +261,10 @@ function on_render()
     imgui.separator()
 
     -- ── CHARACTER RATINGS ─────────────────────────────────────────────────────
+    -- v1.4.1: "Import from character" removed — see changelog header.
+    -- Secondary stats (fervor/pen/crit/mastery) still serve class defaults
+    -- from the engine layer, not live sheet values. Keep manual entry for now.
     imgui.text_colored(0.75, 0.75, 1.0, 1.0, "Character Ratings")
-    -- one-click import from live character sheet (v1.1.5+)
-    if farever.player.locked() then
-        if imgui.button("Import from character") then
-            s.fervor_r    = farever.player.fervor() * 15.0
-            s.armor_pen_r = math.min(farever.player.armor_penetration() * 6.0, 600.0)
-            s.crit_r      = math.max(0.0, farever.player.crit_chance() - BASE_CRIT) * 15.55
-            s.crit_bonus  = farever.player.crit_damage()
-            s.mastery     = farever.player.physical_mastery()
-            changed = true
-            farever.toast("Ratings imported  (mastery = phys; swap to magic if needed)")
-        end
-    end
     imgui.text_colored(0.42, 0.42, 0.42, 1.0,
         "  Enter the rating number from your stat page (not the %)")
 
