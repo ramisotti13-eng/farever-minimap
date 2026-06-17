@@ -1,12 +1,25 @@
 -- ==============================================================
 -- damage-calculator-by-iskrumpie.lua
 -- Submitted by @iSkrumpie  (https://github.com/ramisotti13-eng/farever-minimap/pull/51)
--- Tested against farever-mod v1.1.1
+-- Tested against farever-mod v1.1.5
 -- License: MIT
 --
 -- PvE damage calculator using Aragon's verified formula — rating inputs,
 -- enemy armor presets, visual bars, stat gain analysis, dual-attribute support.
 --
+-- v1.4.1 (2026-06-09):
+--   ! Removed "Import from character" button for ratings.
+--     v1.1.5 only fixed the four primary attribute getters
+--     (strength/dexterity/faith/intellect) + max_health. The secondary stats
+--     used by the ratings import (fervor, armor_penetration, physical_mastery,
+--     crit_chance, crit_damage) still return base/class-default values from
+--     the engine layer, which would have overwritten correctly typed ratings
+--     with zeros. Use the stat page for ratings until the deeper read lands.
+--     Review thread: https://github.com/ramisotti13-eng/farever-minimap/pull/82
+-- v1.4.0 (2026-06-08):
+--   + Live attribute import: [STR] [DEX] [FAI] [INT] buttons next to attr inputs
+--     (requires farever-minimap v1.1.5 — attribute getters now return live values)
+--   - "Import from character" button: removed in v1.4.1 (see above)
 -- v1.3.0 (2026-06-01):
 --   + Balance patch: Crit formula /1250 → /1555 (every 15.56 rating = 1%)
 --   + Base crit 5.7% added as universal character constant
@@ -202,12 +215,45 @@ function on_render()
     drag("Weapon base dmg  (the \"36\" in tooltip)",   "weapon",    0.5, 0.0, 10000.0)
     drag("Skill mod %      (the \"78.75%\" in tooltip)", "skill_mod", 0.1, 0.0,  1000.0)
     drag("Attribute value  (your STR/DEX/INT/FAI)",    "attr1",     0.5, 0.0,  1000.0)
+    -- v1.1.5+: attribute getters now return live values
+    if farever.player.locked() then
+        local live_attrs = {
+            {"STR", farever.player.strength()},
+            {"DEX", farever.player.dexterity()},
+            {"FAI", farever.player.faith()},
+            {"INT", farever.player.intellect()},
+        }
+        imgui.text_colored(0.42, 0.42, 0.42, 1.0, "  Live:")
+        imgui.same_line()
+        for i, a in ipairs(live_attrs) do
+            if imgui.button(string.format("%s %.0f", a[1], a[2])) then
+                s.attr1 = a[2]; changed = true
+            end
+            if i < 4 then imgui.same_line() end
+        end
+    end
 
     -- dual-attribute toggle
     local da, dc = imgui.checkbox("Dual-scaling skill  (e.g. FAI + INT)", s.dual_attr)
     if dc then s.dual_attr = da; changed = true end
     if s.dual_attr then
         drag("Attribute 2  (second stat value)", "attr2", 0.5, 0.0, 1000.0)
+        if farever.player.locked() then
+            local live_attrs2 = {
+                {"STR", farever.player.strength()},
+                {"DEX", farever.player.dexterity()},
+                {"FAI", farever.player.faith()},
+                {"INT", farever.player.intellect()},
+            }
+            imgui.text_colored(0.42, 0.42, 0.42, 1.0, "  Live:")
+            imgui.same_line()
+            for i, a in ipairs(live_attrs2) do
+                if imgui.button(string.format("%s %.0f##2", a[1], a[2])) then
+                    s.attr2 = a[2]; changed = true
+                end
+                if i < 4 then imgui.same_line() end
+            end
+        end
     else
         s.attr2 = 0.0
     end
@@ -215,6 +261,9 @@ function on_render()
     imgui.separator()
 
     -- ── CHARACTER RATINGS ─────────────────────────────────────────────────────
+    -- v1.4.1: "Import from character" removed — see changelog header.
+    -- Secondary stats (fervor/pen/crit/mastery) still serve class defaults
+    -- from the engine layer, not live sheet values. Keep manual entry for now.
     imgui.text_colored(0.75, 0.75, 1.0, 1.0, "Character Ratings")
     imgui.text_colored(0.42, 0.42, 0.42, 1.0,
         "  Enter the rating number from your stat page (not the %)")
