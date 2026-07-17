@@ -4,7 +4,7 @@ This document describes, in plain terms, what the `dinput8.dll` in this mod does
 at the process level: what it reads, what it writes, what it inspects, and what
 it does not do. It is written for users who want to understand the binary they
 are running rather than take a hash on trust. It describes the current release
-(v1.2.1, DLL sha256 `7ad7a4d51854a6d8b8deecc4c133d02a64715146114b692e08ce2888d4d898fa`);
+(v1.2.2, DLL sha256 `ba3bef131fa6ba13842853aa05729074c28c7b57bd5c316c3e3002711138e585`);
 the behaviour below is stable across recent versions.
 
 ## What it is
@@ -93,6 +93,6 @@ explaining:
   can draw a heuristic false positive from an engine or two; the point of the
   multi-engine view is that you are not relying on any single vendor.
 
-  The v1.2.1 DLL was submitted and came back clean, 0 of 69 engines flagged it
-  (checked 2026-07-15):
-  https://www.virustotal.com/gui/file/7ad7a4d51854a6d8b8deecc4c133d02a64715146114b692e08ce2888d4d898fa
+  The v1.2.2 DLL was submitted and came back clean, 0 of 69 engines flagged it
+  (checked 2026-07-17):
+  https://www.virustotal.com/gui/file/ba3bef131fa6ba13842853aa05729074c28c7b57bd5c316c3e3002711138e585
