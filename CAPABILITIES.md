@@ -4,7 +4,7 @@ This document describes, in plain terms, what the `dinput8.dll` in this mod does
 at the process level: what it reads, what it writes, what it inspects, and what
 it does not do. It is written for users who want to understand the binary they
 are running rather than take a hash on trust. It describes the current release
-(v1.2.4, DLL sha256 `2c22ece52a9f7583ac2aa694bd91bc0b4488a69f216c0c249b4f15422d4bfc66`);
+(v1.2.5, DLL sha256 `cf924a2234daca557a9d3213c4b625dabaaab7ad357735bb6d55e89684385384`);
 the behaviour below is stable across recent versions.
 
 ## What it is
@@ -93,11 +93,12 @@ explaining:
   can draw a heuristic false positive from an engine or two; the point of the
   multi-engine view is that you are not relying on any single vendor.
 
-  The v1.2.4 DLL was submitted and came back 1 of 69 (checked 2026-07-25):
+  The v1.2.5 DLL was submitted and came back 1 of 70 (checked 2026-08-02):
   Microsoft's machine-learning heuristic reports `Trojan:Win32/Wacatac.B!ml`,
   every other engine reports nothing. A local Windows Defender scan of the same
-  file reports no threats, and the v1.2.3 DLL re-scanned the same day with the
-  same Microsoft engine build comes back clean, so this is an ML verdict on this
-  particular unsigned binary rather than a signature for the mod. Judge it
-  against the rest of this document and the multi-engine view:
-  https://www.virustotal.com/gui/file/2c22ece52a9f7583ac2aa694bd91bc0b4488a69f216c0c249b4f15422d4bfc66
+  file, on the same engine build (1.1.26060.3008), reports no threats, and
+  earlier releases re-scanned on that engine come back clean, so this is an ML
+  verdict on this particular unsigned binary rather than a signature for the
+  mod. The same verdict appeared for v1.2.4. Judge it against the rest of this
+  document and the multi-engine view:
+  https://www.virustotal.com/gui/file/cf924a2234daca557a9d3213c4b625dabaaab7ad357735bb6d55e89684385384

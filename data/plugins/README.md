@@ -317,13 +317,25 @@ local ic = farever.icons.skill("Mage_RayOfSpark")
 
 -- Raw form, for a cell you already know:
 imgui.atlas_icon("atlas_class_Mage_96PX.png", 0, 0, 96, 24)
+
+-- Every kind that currently has an icon, sorted. Use this instead of
+-- guessing at a name: these are the game's internal skill ids, which
+-- are not always what the tooltip calls the skill.
+for _, kind in ipairs(farever.icons.cached()) do
+    farever.log.info(kind)
+end
 ```
 
 The atlases sit in `data/atlases/UI/icons/` next to the mod, and the
 same `icon` table is attached to every entry of `player.skills()` and
-`player.weapon_skills()`. An icon resolves the first time the mod reads
-that skill's record, which happens during combat, so expect `nil` /
-`false` for a skill you have not used yet this session.
+`player.weapon_skills()`.
+
+Icons resolve shortly after your skills are first read, within a few
+seconds of the hero loading in. Up to and including v1.2.4 this only
+happened while you were fighting, so a skill you had not just hit
+something with stayed `nil` indefinitely; that was issue #104 and is
+fixed in v1.2.5. A short `nil` window right after login is still
+normal, so keep the text fallback.
 
 ### Party
 
@@ -745,7 +757,7 @@ You cannot do these things from a plugin. This is on purpose:
 - Read other players' positions (the mod itself never reads them)
 - Cast spells, click for the user, modify game memory
 - Play arbitrary audio files (only the four named system sounds in
-  `farever.sound()` work — no custom WAV / MP3 paths)
+  `farever.sound()` work, no custom WAV / MP3 paths)
 
 If you find a real-world use case that needs one of these, open an
 issue. We can probably expose a safe wrapper for it.
@@ -757,13 +769,13 @@ plugins for you to grab as starting points:
 
 ### First-party reference plugins (`examples/plugins/`)
 
-- [`hello_world.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/hello_world.lua) — render, button, log, event basics.
-- [`personal_best.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/personal_best.lua) — tracks your best DPS across sessions in the store, fires a toast on new records.
-- [`target_probe.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/target_probe.lua) — every piece of the `farever.target.*` boss-helper surface in one file.
-- [`api_inspector.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/api_inspector.lua) — living documentation of every read-surface getter. Drop it in to see what your character / target currently exposes.
-- [`damage_planner.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/damage_planner.lua) — in-game version of Aragon's PvE damage calculator, with two-build comparison sliders and per-weapon damage memory.
-- [`animation_demo.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/animation_demo.lua) — showcases the v0.5.6 animation surface (blinking text, pulsing size, custom cast bar, telegraph circle, big-red-alert pattern).
-- [`nav_arrow.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/nav_arrow.lua) — 3D-look navigation arrow that points toward an arbitrary world (x, y, z) waypoint and tilts up / down based on vertical offset. Patterns: world-to-player-local rotation via cos/sin of the heading, atan2 for screen angle and vertical tilt, `draw_triangle_filled` for the arrowhead.
+- [`hello_world.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/hello_world.lua): render, button, log, event basics.
+- [`personal_best.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/personal_best.lua): tracks your best DPS across sessions in the store, fires a toast on new records.
+- [`target_probe.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/target_probe.lua): every piece of the `farever.target.*` boss-helper surface in one file.
+- [`api_inspector.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/api_inspector.lua): living documentation of every read-surface getter. Drop it in to see what your character / target currently exposes.
+- [`damage_planner.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/damage_planner.lua): in-game version of Aragon's PvE damage calculator, with two-build comparison sliders and per-weapon damage memory.
+- [`animation_demo.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/animation_demo.lua): showcases the v0.5.6 animation surface (blinking text, pulsing size, custom cast bar, telegraph circle, big-red-alert pattern).
+- [`nav_arrow.lua`](https://github.com/ramisotti13-eng/farever-minimap/blob/main/examples/plugins/nav_arrow.lua): 3D-look navigation arrow that points toward an arbitrary world (x, y, z) waypoint and tilts up / down based on vertical offset. Patterns: world-to-player-local rotation via cos/sin of the heading, atan2 for screen angle and vertical tilt, `draw_triangle_filled` for the arrowhead.
 
 ### Community submissions (`community-plugins/`)
 
