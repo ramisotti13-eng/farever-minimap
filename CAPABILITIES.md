@@ -4,7 +4,7 @@ This document describes, in plain terms, what the `dinput8.dll` in this mod does
 at the process level: what it reads, what it writes, what it inspects, and what
 it does not do. It is written for users who want to understand the binary they
 are running rather than take a hash on trust. It describes the current release
-(v1.2.5, DLL sha256 `cf924a2234daca557a9d3213c4b625dabaaab7ad357735bb6d55e89684385384`);
+(v1.2.6, DLL sha256 `7d5d149bdea06dd52cbe20df0ca8663155f881bc19868ee25249ca5cca8ee25c`);
 the behaviour below is stable across recent versions.
 
 ## What it is
@@ -93,7 +93,7 @@ explaining:
   can draw a heuristic false positive from an engine or two; the point of the
   multi-engine view is that you are not relying on any single vendor.
 
-  The v1.2.5 DLL was submitted and came back 1 of 70 (checked 2026-08-02):
+  The v1.2.6 DLL was submitted and came back 1 of 70 (checked 2026-08-02):
   Microsoft's machine-learning heuristic reports `Trojan:Win32/Wacatac.B!ml`,
   every other engine reports nothing. A local Windows Defender scan of the same
   file, on the same engine build (1.1.26060.3008), reports no threats, and

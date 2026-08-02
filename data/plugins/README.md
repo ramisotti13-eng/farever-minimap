@@ -55,7 +55,21 @@ function on_event(name, data)
     -- "fight_start", "damage_dealt", "fight_end". See the section
     -- below for what data each one carries.
 end
+
+function on_settings()
+    -- v1.2.6+, optional. Defining this puts a "settings" button next to
+    -- your plugin in the plugin manager, which opens a separate window
+    -- and calls this there. Put your options in here instead of
+    -- cluttering the main window. Same widget set as on_render.
+end
 ```
+
+Since v1.2.6 the plugin manager also has a checkbox per plugin. Unchecking
+one keeps it loaded but stops it drawing and stops it receiving events, so
+switching back on is instant. The choice survives a restart, stored as one
+plugin name per line in `plugins_disabled.txt` in your user-data folder.
+A switched-off plugin can still have its settings window opened, since you
+often want to change an option before turning it back on.
 
 ## What you can read
 
@@ -148,6 +162,29 @@ farever.player.glide_speed()
 farever.player.codex(kind)
 -- e.g.  local c = farever.player.codex(farever.target.name())
 --       if c and c.state == "complete" then ... end
+
+-- v1.2.6+: the whole bestiary as an array, sorted by `kind` so the order
+-- is stable between calls. Each entry has the same fields as codex(kind)
+-- plus `kind` itself. Use this when you want to page through the codex by
+-- index instead of having to know the monster ids up front.
+--   { kind, name, path, state, completed, progress, max }
+-- Empty until the codex has been located, a second or two after loading in.
+-- This walks the game's whole bestiary map (a few hundred entries), so
+-- refresh it on an interval or on a kill, NOT every frame.
+farever.player.codex_list()
+-- e.g.  local all = farever.player.codex_list()
+--       for i, e in ipairs(all) do
+--           if not e.completed then
+--               print(i, e.name, e.progress .. "/" .. e.max)
+--           end
+--       end
+
+-- Camera heading in radians (v1.2.6+), the same value the compass uses.
+-- Returns nil when no camera is anchored yet, so fall back to
+-- farever.player.rot_z() in that case. Only the heading is exposed:
+-- position, pitch and the look-at target are deliberately not available.
+farever.camera.rotation_z()
+farever.camera.available()             -- true when rotation_z() is meaningful
 
 -- DPS meter snapshot
 farever.dps.current()                       -- current pull's DPS (float)
@@ -324,6 +361,14 @@ imgui.atlas_icon("atlas_class_Mage_96PX.png", 0, 0, 96, 24)
 for _, kind in ipairs(farever.icons.cached()) do
     farever.log.info(kind)
 end
+
+-- Buff / status kinds work too (v1.2.6+). The game models a status as
+-- its own kind, e.g. "Mage_ShieldOfSpark" grants
+-- "Mage_ShieldOfSpark_Status", and usually gives the status no artwork
+-- of its own. Asking for one falls back to the granting skill's icon,
+-- which is what the game's own buff bar shows. Works for the
+-- _Status / _Buff / _Shield / _Proc suffixes.
+imgui.icon("Mage_ShieldOfSpark_Status", 24)
 ```
 
 The atlases sit in `data/atlases/UI/icons/` next to the mod, and the
