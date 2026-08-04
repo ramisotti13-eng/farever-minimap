@@ -1,8 +1,27 @@
 -- ==============================================================
 -- damage-calculator-by-iskrumpie.lua
 -- Submitted by @iSkrumpie  (https://github.com/ramisotti13-eng/farever-minimap/pull/51)
--- Tested against farever-mod v1.1.5
+-- Tested against farever-mod v1.2.6 (dinput8.dll vom 2026-08-04)
 -- License: MIT
+--
+-- v1.2.6 compat (2026-08-04):
+--   Keine Funktionsänderung nötig. v1.2.4/1.2.5/v1.2.6 sind additiv
+--   und Bug-Fixes — keine breaking changes. v1.2.4: imgui.icon/atlases,
+--   currencies()-Off-by-One-Fix. v1.2.5: Game-Compat-Patch für Farever
+--   V0.2.3.28751, target.name/level-Fix, equipment()/inventory()-base-item-
+--   Fix (gab Müll-Level wie -582159368 für bags/mounts/quickslot).
+--   v1.2.6: codex_list(), camera.rotation_z(), on_settings()-Hook,
+--   Buff/Status-Icons, Akzent-Bug in codex() gefixt.
+--   Wir nutzen keines der neuen Features direkt. Hinweis: target.armor()
+--   returnt für Monster 0 (in v1.2.5 dokumentierte Known Limitation,
+--   wird getrennt getrackt) — wir lesen das schon und zeigen 0 an,
+--   kein Crash.
+--
+-- v1.1.8 compat (2026-06-20):
+--   Keine Funktionsänderung nötig — v1.1.8 hat nur neue optionale API
+--   (class(), uid(), damage_dealt.target/blocked, heal_dealt.target).
+--   Die 4 funktionierenden Live-Attribute-Buttons (STR/DEX/FAI/INT)
+--   funktionieren mit v1.1.5+ unverändert. Header-Bump.
 --
 -- PvE damage calculator using Aragon's verified formula — rating inputs,
 -- enemy armor presets, visual bars, stat gain analysis, dual-attribute support.
