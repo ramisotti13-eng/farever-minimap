@@ -1,7 +1,7 @@
 -- ==============================================================
 -- item-tracker-by-dpiza.lua
 -- Submitted by dpiza
--- Tested against farever-mod v1.2.3+
+-- Tested against farever-mod v1.2.4+
 -- License: MIT
 --
 -- Track a configurable list of items and show bag counts in a
@@ -9,9 +9,18 @@
 --
 -- Requires farever-mod v1.2.1+ for farever.player.inventory().
 -- and it.stack per entry (total quantity in that stack).
+-- Requires farever-mod v1.2.4+ for complete farever.player.currencies().
 --
 -- Item names resolve via embedded DB_items (FareverDB data, same
 -- table as item-finder-by-iskrumpie).
+--
+-- Known issue:
+--   If the character has no currency, farever.player.currencies() may
+--   still return the gold amount of the last logged-in character.
+--
+-- v1.0.2 (2026-07-27):
+--   + Build currency rows from farever.player.currencies() (v1.2.4+);
+--     CURRENCY_LABELS is a display override only
 --
 -- v1.0.1 (2026-07-17):
 --   + Optional currency display via farever.player.currencies() (v1.2.3+)
@@ -916,12 +925,14 @@ local DB_items = {
   ["Soulstone_Z2_3"]={n="Mortalkombaal Soulstone",r="Rare",t="Soulstone",sell=1},
   ["Soulstone_Z2_4"]={n="Kristian Belial Soulstone",r="Epic",t="Soulstone",sell=1},
 }
-local PLUGIN_VERSION = "1.0.1"
+local PLUGIN_VERSION = "1.0.2"
 
-local CURRENCIES = {
-    { kind = "Gold",         label = "Gold" },
-    { kind = "CraftPoint",   label = "Craft point" },
-    { kind = "DemonicSoul", label = "Demonic soul" },
+-- Display overrides only; rows come from farever.player.currencies().
+local CURRENCY_LABELS = {
+    Gold = "Gold",
+    CraftPoint = "Craft points",
+    DemonicSoul = "Demonic souls",
+    Nightblood = "Nightblood",
 }
 
 local DEFAULT_ITEMS = {
@@ -939,17 +950,19 @@ local last_refresh = 0.0
 local REFRESH_SEC = 0.5
 local counts_by_kind = {}   -- lowercased kind -> total quantity
 local currency_amounts = {} -- currency kind -> amount
+local currency_kinds = {}   -- kinds in API return order
 local items_by_name = {}    -- lowercased display name -> item id
 local currency_visible = {}   -- kind -> bool
 local debug_currencies = false
 local currency_api_lines = {} -- last raw snapshot for the debug panel
 
-local function default_currency_visible()
-    local out = {}
-    for _, cur in ipairs(CURRENCIES) do
-        out[cur.kind] = true
+local function ensure_currency_visible(kind)
+    if currency_visible[kind] ~= nil then
+        return currency_visible[kind]
     end
-    return out
+    local visible = farever.store.get("currency_" .. kind, true)
+    currency_visible[kind] = visible
+    return visible
 end
 
 local function escape_field(s)
@@ -1111,6 +1124,7 @@ end
 local function refresh_counts()
     counts_by_kind = {}
     currency_amounts = {}
+    currency_kinds = {}
     inventory_available = false
 
     if type(farever.player.inventory) == "function" then
@@ -1136,7 +1150,10 @@ local function refresh_counts()
         if ok and type(currencies) == "table" then
             for _, entry in ipairs(currencies) do
                 if type(entry) == "table" and entry.kind and entry.kind ~= "" then
-                    currency_amounts[entry.kind] = entry.amount or 0
+                    local kind = entry.kind
+                    currency_amounts[kind] = entry.amount or 0
+                    table.insert(currency_kinds, kind)
+                    ensure_currency_visible(kind)
                 end
             end
         end
@@ -1146,10 +1163,9 @@ local function refresh_counts()
 end
 
 local function currency_label(kind)
-    for _, cur in ipairs(CURRENCIES) do
-        if cur.kind == kind then
-            return cur.label
-        end
+    local override = CURRENCY_LABELS[kind]
+    if override and override ~= "" then
+        return override
     end
     local item = DB_items[kind]
     if item and item.n and item.n ~= "" then
@@ -1159,33 +1175,40 @@ local function currency_label(kind)
 end
 
 local function render_currency_counts()
+    if #currency_kinds == 0 then
+        if show_editor then
+            imgui.text("(no currencies)")
+        end
+        return false
+    end
+
     if show_editor then
-        for _, cur in ipairs(CURRENCIES) do
-            local visible = currency_visible[cur.kind] == true
-            local new_visible, changed = imgui.checkbox("##cur_" .. cur.kind, visible)
+        for _, kind in ipairs(currency_kinds) do
+            local visible = ensure_currency_visible(kind)
+            local new_visible, changed = imgui.checkbox("##cur_" .. kind, visible)
             if changed then
-                currency_visible[cur.kind] = new_visible
-                farever.store.set("currency_" .. cur.kind, new_visible)
+                currency_visible[kind] = new_visible
+                farever.store.set("currency_" .. kind, new_visible)
             end
             imgui.same_line()
 
-            local amount = currency_amounts[cur.kind]
-            local label = currency_label(cur.kind)
+            local amount = currency_amounts[kind]
+            local label = currency_label(kind)
             if amount == nil then
                 imgui.text(string.format("%s: —", label))
             else
                 imgui.text(string.format("%s: %d", label, amount))
             end
         end
-        return #CURRENCIES > 0
+        return true
     end
 
     local any = false
-    for _, cur in ipairs(CURRENCIES) do
-        if currency_visible[cur.kind] then
+    for _, kind in ipairs(currency_kinds) do
+        if ensure_currency_visible(kind) then
             any = true
-            local amount = currency_amounts[cur.kind]
-            local label = currency_label(cur.kind)
+            local amount = currency_amounts[kind]
+            local label = currency_label(kind)
             if amount == nil then
                 imgui.text(string.format("%s: —", label))
             else
@@ -1333,10 +1356,9 @@ function on_init()
     track_currency = farever.store.get("track_currency", true)
     show_editor = farever.store.get("show_editor", false)
     debug_currencies = farever.store.get("debug_currencies", false)
-    currency_visible = default_currency_visible()
-    for _, cur in ipairs(CURRENCIES) do
-        currency_visible[cur.kind] = farever.store.get(
-            "currency_" .. cur.kind, currency_visible[cur.kind])
+    currency_visible = {}
+    for kind, _ in pairs(CURRENCY_LABELS) do
+        currency_visible[kind] = farever.store.get("currency_" .. kind, true)
     end
     local blob = farever.store.get("tracked_items", "")
     if blob == "" then
@@ -1358,6 +1380,7 @@ function on_init()
     last_refresh = 0.0
     counts_by_kind = {}
     currency_amounts = {}
+    currency_kinds = {}
     currency_api_lines = {}
     farever.log.info(string.format(
         "loaded: item_tracker v%s (%d tracked, %d known items)",
