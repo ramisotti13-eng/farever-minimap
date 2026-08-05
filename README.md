@@ -77,24 +77,35 @@ more (see [Notes](#notes) at the end).
 
 ## Status
 
-**v1.1.1 is the current stable build.** It carries the full feature set in a
+**v1.2.6 is the current stable build.** It carries the full feature set in a
 single DLL with a render-mode chooser: minimap, camera compass, custom
 waypoints, party display, DPS + HPS meter, the boss speedrun timer, and the
 plugin runtime.
 
 Recent changes:
 
+* **v1.2.6** added `farever.player.codex_list()` (the whole bestiary in one
+  call), `farever.camera.rotation_z()`, icons for buff and status kinds, an
+  on/off switch per plugin in the plugin manager, and per-plugin settings
+  windows. It also fixed localized names losing their accents, which affected
+  every non-English client.
+* **v1.2.5** restored compatibility with the 2026-07-29 game update
+  (V0.2.3.28751), which had broken target name and level, player buffs and the
+  character name. Skill icons now resolve without needing to be in combat.
+* **v1.2.4** refreshed the collectible data for the current client (Crimson
+  Island was missing entirely), fixed `currencies()` dropping its last entry,
+  and exposed skill icons to plugins.
+* **v1.2.0 to v1.2.3** tracked several game updates in a row and added the
+  equipment, inventory, class, weapon-skill and cooldown APIs.
 * **v1.1.1** moved all of your saved settings and progress out of the game
   folder and into your Windows user folder, so reinstalling the mod or
   verifying the game in Steam no longer wipes them (see
-  [Where your settings live](#where-your-settings-live)). The options panel is
-  now its own draggable window too.
-* **v1.1.0** made the compass follow your camera, added the opt-in boss
-  speedrun timer, and made the mod auto-detect Proton / Wine on Linux so the
-  render-mode dialog is skipped there (the dialog does not draw correctly under
-  Proton anyway).
-* **v1.0.0** unified the older DirectComposition and swap-chain builds into one
-  DLL with the render-mode chooser.
+  [Where your settings live](#where-your-settings-live)).
+
+Every release lists the SHA-256 of the zip and the DLL, and reports the
+VirusTotal result openly, including the false positive that Microsoft's
+machine-learning heuristic currently raises on the unsigned DLL. See
+[CAPABILITIES.md](CAPABILITIES.md) for what the binary actually does.
 
 The `DX12Driver.present` access violation from the old v0.5.x series (issues
 #41, #42, #43) was fixed back in v0.6.0 by reading game state from a background
@@ -106,8 +117,13 @@ attached.
 
 ## Which release do I download?
 
-Get **[v1.1.1](../../releases/latest)**, the current stable build, for
+Get **[v1.2.6](../../releases/latest)**, the current stable build, for
 **Windows and Linux / Steam Play (Proton)**.
+
+The mod checks the game build it is loaded into against a list of versions it
+has been migrated for. After a Farever update it may take a day or two before a
+matching mod release is out; until then the mod tells you it does not recognise
+the build rather than reading the wrong memory.
 
 On **Windows**, the first launch asks how the overlay should draw. You choose
 once (changeable later in the overlay settings, restart to apply):
@@ -351,16 +367,22 @@ ready-to-use plugins:
   filename and a header naming the source. See that folder's README
   for the submission process.
 
-Plugins get sandboxed Lua 5.4. They can read your player position,
-DPS, in-combat flag, fight events, the equipped weapon and the full
-loadout, the current target and its cast bar, the compass, your
-waypoints, and your party. They can draw their own ImGui window with
-text, buttons, sliders, checkboxes, color pickers, combos, progress
-bars, and custom shapes for animated alerts and telegraphs. They can
-show centered toast notifications, play system sounds, and persist
+Plugins get sandboxed Lua 5.4. They can read your player position and
+camera heading, DPS, in-combat flag, fight events, your character sheet,
+the equipped weapon and the full loadout, your inventory and currencies,
+your skills with their cooldowns, your active buffs, the current target
+and its cast bar, your bestiary progress, the compass, your waypoints,
+and your party. They can draw their own ImGui window with text, buttons,
+sliders, checkboxes, color pickers, combos, progress bars, the game's own
+skill icons, and custom shapes for animated alerts and telegraphs. They
+can show centered toast notifications, play system sounds, and persist
 per-plugin state to disk. They cannot touch game memory, network, the
 filesystem outside their own state, or other plugins' state. A bad
 plugin only crashes itself; the mod keeps running.
+
+In the plugin manager each plugin has an on/off checkbox, and a plugin
+that provides one gets a settings button that opens its options in a
+separate window.
 
 Full authoring guide is at
 [`data/plugins/README.md`](data/plugins/README.md) (also included
