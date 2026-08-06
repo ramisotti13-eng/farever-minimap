@@ -5,6 +5,9 @@
 -- License: MIT
 --
 -- Target Codex & Bestiary completion assistant with current-zone prioritization, auto-updating minimap encounter waypoints, and compact UI.
+--
+-- Waypoint write throttling, the farever.now() switch and the load log line
+-- were added during review of PR #103; the rest is Kubuzer's.
 -- ==============================================================
 
 local discovered_set = {}
@@ -17,11 +20,20 @@ local last_save_time = 0
 local last_cache_update = 0
 local current_zone_prefix = ""
 
+-- Waypoint writes are expensive on the mod side: every add and every remove
+-- rewrites waypoints.json and logs a line. Only touch them when the tracked
+-- position actually moved or the target changed.
+local last_wp_kind = nil
+local last_wp_x, last_wp_y = 0, 0
+local WP_MOVE_EPSILON = 2.0   -- metres; a "last seen here" pin needs no more
+
 function on_init()
+    local restored = 0
     if farever and farever.store then
         local saved_str = farever.store.get("discovered_mobs", "")
         for k in string.gmatch(saved_str, "([^,]+)") do
             discovered_set[k] = true
+            restored = restored + 1
         end
 
         local saved_lvls = farever.store.get("mob_levels_json", "")
@@ -32,6 +44,8 @@ function on_init()
             end
         end
     end
+    farever.log.info(string.format(
+        "codex-tracker: loaded, %d mob(s) restored from the store", restored))
 end
 
 local function flush_store_if_dirty(now)
@@ -55,33 +69,38 @@ local function flush_store_if_dirty(now)
     last_save_time = now
 end
 
-local function remove_waypoint_for_mob(display_name, kind)
+-- Cheap removal for the per-frame path: we know the id we placed, so there is
+-- no reason to walk the whole waypoint list. Leftovers from an earlier session
+-- (mob_waypoints does not persist) are handled by the sweep in the cache
+-- rebuild, which pays for one list() call every 0.5 s instead of one per mob
+-- per frame.
+local function remove_waypoint_by_id(kind)
     if not (farever and farever.waypoints) then return end
-    local target_wp_name = "Bestiary: " .. display_name
-
-    -- Check active waypoints list
-    for _, w in ipairs(farever.waypoints.list()) do
-        if w.name == target_wp_name or w.name == ("Bestiary: " .. kind) then
-            farever.waypoints.remove(w.id)
-        end
-    end
-
-    if mob_waypoints[kind] then
-        farever.waypoints.remove(mob_waypoints[kind])
-        mob_waypoints[kind] = nil
-    end
+    local id = mob_waypoints[kind]
+    if not id then return end
+    farever.waypoints.remove(id)
+    mob_waypoints[kind] = nil
 end
 
+-- Returns true when a pin was actually placed, so the caller only remembers a
+-- position it really pinned and retries on the next frame otherwise.
 local function update_waypoint_for_mob(display_name, kind, x, y, z)
-    if not (farever and farever.waypoints) then return end
-    if not x or not y or (x == 0 and y == 0) then return end
+    if not (farever and farever.waypoints) then return false end
+    if not x or not y or (x == 0 and y == 0) then return false end
 
     local wp_name = "Bestiary: " .. display_name
 
-    -- Remove previous waypoint for this mob to overwrite with last-seen position
-    for _, w in ipairs(farever.waypoints.list()) do
-        if w.name == wp_name or w.name == ("Bestiary: " .. kind) then
-            farever.waypoints.remove(w.id)
+    -- Drop the previous pin for this mob so the new one replaces it. Prefer the
+    -- id we remembered; only fall back to a name scan when we have none (first
+    -- pin of the session for a mob tracked in an earlier one).
+    if mob_waypoints[kind] then
+        farever.waypoints.remove(mob_waypoints[kind])
+        mob_waypoints[kind] = nil
+    else
+        for _, w in ipairs(farever.waypoints.list()) do
+            if w.name == wp_name or w.name == ("Bestiary: " .. kind) then
+                farever.waypoints.remove(w.id)
+            end
         end
     end
 
@@ -89,7 +108,9 @@ local function update_waypoint_for_mob(display_name, kind, x, y, z)
     local wp_id = farever.waypoints.add(x, y, z or 0, wp_name, { color = "orange", icon = "pin" })
     if wp_id then
         mob_waypoints[kind] = wp_id
+        return true
     end
+    return false
 end
 
 local function register_mob(mob_id)
@@ -138,6 +159,27 @@ local function rebuild_incomplete_cache()
 
     total_tracked_count = 0
 
+    -- One list() call for the whole sweep, keyed by name, instead of one per
+    -- completed mob. Built lazily: a tracker with nothing completed never pays
+    -- for it at all.
+    local live_wps = nil
+    local function wp_ids_named(name)
+        if live_wps == nil then
+            live_wps = {}
+            if farever and farever.waypoints then
+                for _, w in ipairs(farever.waypoints.list()) do
+                    local bucket = live_wps[w.name]
+                    if bucket then
+                        bucket[#bucket + 1] = w.id
+                    else
+                        live_wps[w.name] = { w.id }
+                    end
+                end
+            end
+        end
+        return live_wps[name]
+    end
+
     for kind, _ in pairs(discovered_set) do
         total_tracked_count = total_tracked_count + 1
         local info = farever.player.codex(kind)
@@ -145,7 +187,17 @@ local function rebuild_incomplete_cache()
             if info.completed or info.state == "complete" then
                 -- Auto-remove waypoint if completed 100%
                 local display_name = info.name or kind
-                remove_waypoint_for_mob(display_name, kind)
+                remove_waypoint_by_id(kind)
+                for _, nm in ipairs({ "Bestiary: " .. display_name,
+                                      "Bestiary: " .. kind }) do
+                    local ids = wp_ids_named(nm)
+                    if ids then
+                        for _, id in ipairs(ids) do
+                            farever.waypoints.remove(id)
+                        end
+                        live_wps[nm] = nil
+                    end
+                end
             else
                 local lvl = mob_levels[kind] or 0
                 local entry_zone = extract_zone_name(info.path)
@@ -181,7 +233,10 @@ local function rebuild_incomplete_cache()
 end
 
 function on_render()
-    local now = os.clock()
+    -- farever.now() is monotonic wall-clock seconds. os.clock() is processor
+    -- time, so it drifts against real time and stops advancing while the
+    -- process is idle, which made both throttles below unreliable.
+    local now = farever.now()
     flush_store_if_dirty(now)
 
     if is_dirty or (now - last_cache_update) > 0.5 then
@@ -224,7 +279,12 @@ function on_render()
                 if codex_info.completed or codex_info.state == "complete" then
                     imgui.same_line()
                     imgui.text_colored(0.2, 1.0, 0.2, 1.0, " - [100% COMPLETED]")
-                    remove_waypoint_for_mob(display_name, current_target_kind)
+                    -- Only the id path here: after the first call there is
+                    -- nothing left to remove, so this costs nothing per frame.
+                    remove_waypoint_by_id(current_target_kind)
+                    if last_wp_kind == current_target_kind then
+                        last_wp_kind = nil
+                    end
                 else
                     imgui.same_line()
                     if pct >= 0.85 then
@@ -233,9 +293,24 @@ function on_render()
                         imgui.text_colored(0.7, 0.7, 0.7, 1.0, string.format(" -  %d / %d", progress, max_val))
                     end
 
-                    -- Update/overwrite waypoint with the LAST-SEEN coordinates of the mob
+                    -- Update/overwrite waypoint with the LAST-SEEN coordinates of
+                    -- the mob. This runs every frame, and each update rewrites
+                    -- waypoints.json on the mod side, so only fire it when the
+                    -- target changed or the mob actually moved a couple of
+                    -- metres. Without this it was ~89 file rewrites per second
+                    -- off a single standing target, and it burned waypoint ids
+                    -- until the cap refused new ones.
                     local tx, ty, tz = farever.target.x(), farever.target.y(), farever.target.z()
-                    update_waypoint_for_mob(display_name, current_target_kind, tx, ty, tz)
+                    if tx and ty then
+                        local moved = math.abs(tx - last_wp_x) > WP_MOVE_EPSILON
+                                   or math.abs(ty - last_wp_y) > WP_MOVE_EPSILON
+                        if current_target_kind ~= last_wp_kind or moved then
+                            if update_waypoint_for_mob(display_name, current_target_kind, tx, ty, tz) then
+                                last_wp_kind = current_target_kind
+                                last_wp_x, last_wp_y = tx, ty
+                            end
+                        end
+                    end
                 end
 
                 -- Target Health Bar
