@@ -77,13 +77,23 @@ more (see [Notes](#notes) at the end).
 
 ## Status
 
-**v1.2.6 is the current stable build.** It carries the full feature set in a
+**v1.2.8 is the current stable build.** It carries the full feature set in a
 single DLL with a render-mode chooser: minimap, camera compass, custom
 waypoints, party display, DPS + HPS meter, the boss speedrun timer, and the
 plugin runtime.
 
 Recent changes:
 
+* **v1.2.8** tracked the 2026-09-11 game update (v0.2.4.29918), which moved the
+  loadout, inventory, item and progress memory layout. It also fixed two older
+  bugs: `inventory()` and `equipment()` reported a nonsense upgrade level for
+  recipes and masteries, and the rare-mob watcher could log engine strings as
+  monster names and alert on them. The build check is stricter now, see below.
+* **v1.2.7** fixed `statuses()` returning the statuses you had applied to
+  others instead of the ones on you, made class resources report live values
+  and added the matching `*_max` getters, added a per-character store and
+  `character_key()`, and shipped the four talent icon sheets that had never
+  been packaged.
 * **v1.2.6** added `farever.player.codex_list()` (the whole bestiary in one
   call), `farever.camera.rotation_z()`, icons for buff and status kinds, an
   on/off switch per plugin in the plugin manager, and per-plugin settings
@@ -117,13 +127,20 @@ attached.
 
 ## Which release do I download?
 
-Get **[v1.2.6](../../releases/latest)**, the current stable build, for
+Get **[v1.2.8](../../releases/latest)**, the current stable build, for
 **Windows and Linux / Steam Play (Proton)**.
 
 The mod checks the game build it is loaded into against a list of versions it
 has been migrated for. After a Farever update it may take a day or two before a
 matching mod release is out; until then the mod tells you it does not recognise
 the build rather than reading the wrong memory.
+
+Since v1.2.8 that list is strict: it names only the game builds whose memory
+layout matches the DLL shipped next to it, rather than every build the mod has
+ever supported. Farever moves things around in memory on most updates, so an
+older client is not a lesser version of a newer one, it is a different one. If
+you are on a build the release was not made for you now get told, instead of
+getting numbers that look plausible and are wrong.
 
 On **Windows**, the first launch asks how the overlay should draw. You choose
 once (changeable later in the overlay settings, restart to apply):
