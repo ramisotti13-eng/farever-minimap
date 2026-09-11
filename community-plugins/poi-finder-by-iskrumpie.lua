@@ -1,7 +1,24 @@
 -- ============================================================
 -- POI Finder v2.3 — by @iSkrumpie
--- Tested against: farever-mod v1.1.5
+-- Tested against: farever-mod v1.2.6 (dinput8.dll vom 2026-08-04)
 -- License: MIT
+--
+-- v1.2.6 compat (2026-08-04):
+--   Keine Funktionsänderung nötig. v1.2.4/1.2.5/v1.2.6 sind additiv
+--   und Bug-Fixes — keine breaking changes. v1.2.4: imgui.icon/atlases,
+--   currencies()-Off-by-One-Fix, +179 neue POIs (Crimson Island / Ramburg).
+--   v1.2.5: Game-Compat-Patch für Farever V0.2.3.28751 (cullingZOffset-
+--   Insert, 32 Offsets per field-name migriert) — target.name/level-Fix,
+--   equipment()/inventory() base-item-Fix. v1.2.6: codex_list(),
+--   camera.rotation_z()/available(), on_settings()-Hook, Buff/Status-Icons,
+--   Akzent-Bug in codex() gefixt.
+--   Wir nutzen keines der neuen Features direkt. POI-JSON erneuert
+--   (1224 statt 1082 Einträge → +84 Red Orbs, +30 Chests, +20 Activities).
+--
+-- v1.1.8 compat (2026-06-20):
+--   Keine Funktionsänderung nötig — v1.1.8 hat nur neue optionale API
+--   (class(), uid(), damage_dealt.target/blocked, heal_dealt.target).
+--   Header-Bump, damit der Hinweis zur DLL-Version stimmt.
 --
 -- v2.0.0 (2026-05-22):
 --   + Navigation arrow panel (draw_triangle + draw_line, player-
