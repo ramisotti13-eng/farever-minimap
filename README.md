@@ -575,3 +575,7 @@ This is fan made and is not affiliated with Shiro Games. All
 Farever assets remain the property of their respective owners; the
 release zip bundles a subset of the game's UI textures and map
 tiles for runtime display only.
+
+The MIT license in [LICENSE](LICENSE) covers the mod's own source code.
+It does not cover Farever, its data files, or anything extracted from the
+game. Nothing extracted from the game is committed to this repository.

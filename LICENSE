@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This license covers the mod's own source code. It does not cover Farever
-itself, its data files, or any asset extracted from the game: those belong to
-Shiro Games. Nothing extracted from the game is committed to this repository.
-The tools under tools/ regenerate what is needed from your own installation.
