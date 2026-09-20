@@ -26,9 +26,10 @@
 >   draws through Direct3D 12; very old GPUs or unpatched OS installs are more
 >   fragile here.
 >
-> If the mod or the game crashes, please open an issue and attach
-> `farever-mod.log` from your Farever folder. That log is the fastest way to
-> narrow the cause.
+> If the mod or the game crashes, `farever-mod.log` in your Farever folder is
+> the fastest way to narrow the cause. You can still open an issue with it
+> attached, but read [Status](#status) first: the project is between
+> maintainers, so nobody may answer.
 
 A drop-in overlay for Farever (Shiro Games) that bundles several tools into a
 single DLL. Everything below is in one download, nothing extra to install.
@@ -77,15 +78,24 @@ more (see [Notes](#notes) at the end).
 
 ## Status
 
-**The source is open now, and the project is looking for someone to carry
-it on.** The person who built it does not have the time to keep it going.
-Everything is in this repository under the MIT license, it builds from a
-fresh clone, and [CONTRIBUTING.md](CONTRIBUTING.md) documents the one job
-that really matters: redoing the memory offsets after a game update, which
-is what breaks the mod every few weeks. Taking it over or forking it and
-going your own way are both fine. Nobody needs to ask.
+> **This project is looking for a maintainer.** The person who built it has
+> run out of time for it. As of September 2026 nobody is shipping updates,
+> answering issues or reviewing pull requests.
+>
+> **What that means if you play.** The mod works on the game build it was made
+> for. It will stop working the next time Farever moves things around in
+> memory, which happens on most updates. When that day comes it tells you it
+> does not recognise your client instead of showing you wrong numbers, and
+> there will be no fix unless somebody picks the project up.
+>
+> **What that means if you want to fix it.** Everything is here under the MIT
+> license and it builds from a clean clone.
+> [CONTRIBUTING.md](CONTRIBUTING.md) documents the one job that actually
+> matters, redoing the memory offsets after a game update, in the order it has
+> to be done. Taking the repo over or forking it and going your own way are
+> both fine, and neither needs anyone's permission.
 
-**v1.2.8 is the current stable build.** It carries the full feature set in a
+**v1.2.8 is the last release.** It carries the full feature set in a
 single DLL with a render-mode chooser: minimap, camera compass, custom
 waypoints, party display, DPS + HPS meter, the boss speedrun timer, and the
 plugin runtime.
@@ -120,9 +130,11 @@ Recent changes:
   verifying the game in Steam no longer wipes them (see
   [Where your settings live](#where-your-settings-live)).
 
-Every release lists the SHA-256 of the zip and the DLL, and reports the
-VirusTotal result openly, including the false positive that Microsoft's
-machine-learning heuristic currently raises on the unsigned DLL. See
+Every release lists the SHA-256 of the zip and the DLL and reports the
+VirusTotal result openly, whatever it says. v1.2.8 came back clean on every
+engine. Some earlier releases picked up a single detection from Microsoft's
+machine-learning heuristic, which is a shape-based guess rather than a
+signature, and those releases said so at the time. See
 [CAPABILITIES.md](CAPABILITIES.md) for what the binary actually does.
 
 The `DX12Driver.present` access violation from the old v0.5.x series (issues
@@ -130,18 +142,21 @@ The `DX12Driver.present` access violation from the old v0.5.x series (issues
 thread that is invisible to the game's garbage collector, instead of riding the
 game's render thread.
 
-If the mod crashes for you, please open an issue with `farever-mod.log`
-attached.
+If the mod crashes for you, `farever-mod.log` is what a future maintainer
+would need. Attaching it to an issue leaves a useful record even while nobody
+is answering them.
 
 ## Which release do I download?
 
-Get **[v1.2.8](../../releases/latest)**, the current stable build, for
-**Windows and Linux / Steam Play (Proton)**.
+Get **[v1.2.8](../../releases/latest)**, the last release, for **Windows and
+Linux / Steam Play (Proton)**.
 
 The mod checks the game build it is loaded into against a list of versions it
-has been migrated for. After a Farever update it may take a day or two before a
-matching mod release is out; until then the mod tells you it does not recognise
-the build rather than reading the wrong memory.
+has been migrated for. If your client is not on that list it says so rather
+than reading the wrong memory. While the project has no maintainer, no new
+release is coming when that happens. You can run it anyway at the prompt and
+accept that gear, bags and progress may be wrong, or migrate and build it
+yourself (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 Since v1.2.8 that list is strict: it names only the game builds whose memory
 layout matches the DLL shipped next to it, rather than every build the mod has
@@ -164,12 +179,12 @@ On **Linux / Proton**, the mod detects that it is running under Proton/Wine and
 picks **Fast** automatically (the only mode that works under vkd3d/DXVK), so
 there is no dialog and no restart, the overlay just comes up.
 
-If a build does not bring up the overlay on your machine, open an issue and
-attach `farever-mod.log` from your Farever folder.
+If a build does not bring up the overlay on your machine, `farever-mod.log`
+in your Farever folder usually says why.
 
 ## How to install
 
-1. Grab `farever-minimap-dps-1.1.1.zip` from the
+1. Grab `farever-minimap-dps-1.2.8.zip` from the
    [Releases page](../../releases/latest).
 2. Extract straight into your Farever folder, the one that contains
    `Farever.exe`. Typical Steam path:
@@ -460,11 +475,10 @@ accept the prompt, reboot), `farever-undo-amd-overlay-fix.reg` (rollback), and
 mode skips the composition layer entirely, so the MPO interaction does not
 apply there.
 
-If the game crashes after a while, please zip the `farever-mod.log`
-file from your Farever folder and open an issue with it attached.
-Since 0.5.2 the previous session's log is kept as
-`farever-mod.log.1` after a restart, so you can grab both files
-even if you reproduce the crash and relaunch before uploading.
+If the game crashes after a while, `farever-mod.log` in your Farever folder
+is where the evidence is. Since 0.5.2 the previous session's log is kept as
+`farever-mod.log.1` after a restart, so you can grab both files even if you
+reproduce the crash and relaunch first.
 
 ## Compatibility notes
 
@@ -559,8 +573,10 @@ written and shared by players of the mod:
 * [Ooshraxa](https://github.com/KaareGravesen) - mob codex checker
 * [@Mupki](https://github.com/Mupki) - combat logger
 
-Thanks for sharing your work. Want your plugin listed here? See the
-[community-plugins README](community-plugins/README.md).
+Thanks for sharing your work. The
+[community-plugins README](community-plugins/README.md) explains how a plugin
+gets listed, though with the project between maintainers there is nobody to
+merge a pull request right now.
 
 ## Notes
 
