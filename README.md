@@ -77,6 +77,14 @@ more (see [Notes](#notes) at the end).
 
 ## Status
 
+**The source is open now, and the project is looking for someone to carry
+it on.** The person who built it does not have the time to keep it going.
+Everything is in this repository under the MIT license, it builds from a
+fresh clone, and [CONTRIBUTING.md](CONTRIBUTING.md) documents the one job
+that really matters: redoing the memory offsets after a game update, which
+is what breaks the mod every few weeks. Taking it over or forking it and
+going your own way are both fine. Nobody needs to ask.
+
 **v1.2.8 is the current stable build.** It carries the full feature set in a
 single DLL with a render-mode chooser: minimap, camera compass, custom
 waypoints, party display, DPS + HPS meter, the boss speedrun timer, and the
@@ -518,6 +526,29 @@ even if you reproduce the crash and relaunch before uploading.
   game's own render path down with it (an adapter-wide driver error).
   Safest is to quit to the launcher before changing resolution, then
   restart Farever.
+
+## Building from source
+
+Requires Visual Studio 2022 or newer with the C++ workload, and CMake 3.20
+or newer. Everything else is fetched by CMake.
+
+```
+cmake -S src -B build -G "Visual Studio 18 2026" -A x64
+cmake --build build --config RelWithDebInfo --parallel
+```
+
+Use your own generator name on an older Visual Studio, for example
+`"Visual Studio 17 2022"`. The result is
+`build/farever-mod/RelWithDebInfo/dinput8.dll`. Copy it next to
+`Farever.exe` and launch the game.
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the mod reads game
+state and where the fragile parts are. [CONTRIBUTING.md](CONTRIBUTING.md)
+covers the offset migration that most game updates require.
+
+No game assets are committed here. The release zip bundles a subset of the
+game's UI textures and map tiles for display; the extractors under `tools/`
+regenerate those from your own installation.
 
 ## Contributors
 

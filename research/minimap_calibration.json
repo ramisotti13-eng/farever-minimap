@@ -1,0 +1,9 @@
+{
+  "_comment": "Auto-fitted by tools/calibrate.py. DLL hot-reloads on mtime change.",
+  "scale_x": 1.7756499661218983,
+  "scale_y": 1.7707905370196702,
+  "offset_x": 4096.76539455183,
+  "offset_y": 6150.390302226916,
+  "flip_y": false,
+  "zoom": 19.0
+}

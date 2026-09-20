@@ -1,0 +1,57 @@
+{
+ "Vitality": [
+  "Vitalität",
+  "Vitalidad",
+  "Vitalité",
+  "活力",
+  "활력",
+  "Witalność",
+  "Vitalidade",
+  "Живучесть",
+  "活力"
+ ],
+ "Strength": [
+  "Stärke",
+  "Fuerza",
+  "Force",
+  "筋力",
+  "힘",
+  "Siła",
+  "Força",
+  "Сила",
+  "力量"
+ ],
+ "Dexterity": [
+  "Geschicklichkeit",
+  "Destreza",
+  "Dextérité",
+  "技量",
+  "민첩",
+  "Zręczność",
+  "Destreza",
+  "Ловкость",
+  "敏捷"
+ ],
+ "Faith": [
+  "Glaube",
+  "Fe",
+  "Foi",
+  "信仰",
+  "믿음",
+  "Wiara",
+  "Fé",
+  "Вера",
+  "信仰"
+ ],
+ "Intellect": [
+  "Intelligenz",
+  "Intelecto",
+  "Intelligence",
+  "知力",
+  "지능",
+  "Intelekt",
+  "Intelecto",
+  "Интеллект",
+  "智力"
+ ]
+}

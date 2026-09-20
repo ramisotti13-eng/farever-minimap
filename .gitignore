@@ -4,3 +4,65 @@
 # hello_world / personal_best ship in the release zip, not here.
 data/plugins/*.lua
 data/plugins/*.store.lua
+
+# Build output
+build/
+src/**/build/
+src/**/x64/
+src/**/Debug/
+src/**/Release/
+*.dll
+*.exe
+*.exp
+*.lib
+*.pdb
+*.obj
+*.o
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Derived from the game and not redistributed. Regenerate these from your
+# own installation with the extractors in tools/. A single hlbc_parse.py
+# class dump is around 35 MB.
+classes*.json
+research/hlboot.*
+research/extracted/
+research/icons/
+research/maps/*.png
+research/maps/*.json
+research/*.bin
+research/*.tsv
+
+# Local run artifacts
+*.log
+research/live_position.json
+research/fow_state.json
+release/
+release-staging/
+farever-minimap-*.zip
+tools/hashlink/
+tools/hlbc.exe
+tools/*.zip
+tools/snapshot_*.npz
+tools/diff_*.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Local secrets, never commit
+.env
