@@ -1,21 +1,23 @@
 # Farever Minimap & DPS
 
-> ## This project is looking for a maintainer
+> ## I am looking for someone to take this over
 >
-> The person who built it has run out of time for it. As of September 2026
-> nobody is shipping updates, answering issues or reviewing pull requests.
+> I wrote this mod and I no longer have the time to keep it going. As of
+> September 2026 I am not shipping updates, answering issues or reviewing pull
+> requests any more.
 >
-> **If you play it.** The mod works on the game build it was made for. It will
-> stop working the next time Farever moves things around in memory, which
-> happens on most updates. When that day comes it tells you it does not
-> recognise your client instead of showing you wrong numbers, and there will be
-> no fix unless somebody picks the project up.
+> **If you play it.** It works on the game build it was made for. It will stop
+> working the next time Farever moves things around in memory, which happens on
+> most updates. When that day comes it will tell you it does not recognise your
+> client rather than show you wrong numbers, and there will be no fix unless
+> somebody picks it up.
 >
 > **If you want to take it over.** Everything is here under the MIT license and
-> it builds from a clean clone. [CONTRIBUTING.md](CONTRIBUTING.md) documents
-> the one job that actually matters, redoing the memory offsets after a game
-> update, in the order it has to be done. Forking it or taking the repo over
-> are both fine, and neither needs anyone's permission.
+> it builds from a clean clone. I wrote
+> [CONTRIBUTING.md](CONTRIBUTING.md) for exactly this moment: it documents the
+> one job that really matters, redoing the memory offsets after a game update,
+> in the order it has to be done. Fork it or take the repository over, you do
+> not need to ask me.
 
 ![Farever Minimap](minimap.gif)
 ![Farever DPS meter](dpsmeter.gif)
@@ -45,8 +47,7 @@
 >
 > If the mod or the game crashes, `farever-mod.log` in your Farever folder is
 > the fastest way to narrow the cause. You can still open an issue with it
-> attached, but see the notice above: the project has no maintainer, so
-> nobody may answer.
+> attached, but see the notice above: I am not answering them any more.
 
 A drop-in overlay for Farever (Shiro Games) that bundles several tools into a
 single DLL. Everything below is in one download, nothing extra to install.
@@ -98,7 +99,7 @@ more (see [Notes](#notes) at the end).
 **v1.2.8 is the last release.** It carries the full feature set in a single
 DLL with a render-mode chooser: minimap, camera compass, custom waypoints,
 party display, DPS + HPS meter, the boss speedrun timer, and the plugin
-runtime. No further releases are planned, see the notice at the top of this
+runtime. It is the last one I am making, see the notice at the top of this
 page.
 
 Recent changes:
@@ -143,9 +144,9 @@ The `DX12Driver.present` access violation from the old v0.5.x series (issues
 thread that is invisible to the game's garbage collector, instead of riding the
 game's render thread.
 
-If the mod crashes for you, `farever-mod.log` is what a future maintainer
-would need. Attaching it to an issue leaves a useful record even while nobody
-is answering them.
+If the mod crashes for you, `farever-mod.log` is what whoever takes this over
+would need. Attaching it to an issue leaves a useful record, even though I am
+not reading them any more.
 
 ## Which release do I download?
 
@@ -154,8 +155,8 @@ Linux / Steam Play (Proton)**.
 
 The mod checks the game build it is loaded into against a list of versions it
 has been migrated for. If your client is not on that list it says so rather
-than reading the wrong memory. While the project has no maintainer, no new
-release is coming when that happens. You can run it anyway at the prompt and
+than reading the wrong memory. I am not making new releases, so no matching
+build is coming when that happens. You can run it anyway at the prompt and
 accept that gear, bags and progress may be wrong, or migrate and build it
 yourself (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
@@ -574,10 +575,10 @@ written and shared by players of the mod:
 * [Ooshraxa](https://github.com/KaareGravesen) - mob codex checker
 * [@Mupki](https://github.com/Mupki) - combat logger
 
-Thanks for sharing your work. The
+Thank you for sharing your work, it made this a better thing than I could
+have built alone. The
 [community-plugins README](community-plugins/README.md) explains how a plugin
-gets listed, though with the project between maintainers there is nobody to
-merge a pull request right now.
+gets listed, though I am not merging pull requests any more.
 
 ## Notes
 
