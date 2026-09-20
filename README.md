@@ -1,5 +1,22 @@
 # Farever Minimap & DPS
 
+> ## This project is looking for a maintainer
+>
+> The person who built it has run out of time for it. As of September 2026
+> nobody is shipping updates, answering issues or reviewing pull requests.
+>
+> **If you play it.** The mod works on the game build it was made for. It will
+> stop working the next time Farever moves things around in memory, which
+> happens on most updates. When that day comes it tells you it does not
+> recognise your client instead of showing you wrong numbers, and there will be
+> no fix unless somebody picks the project up.
+>
+> **If you want to take it over.** Everything is here under the MIT license and
+> it builds from a clean clone. [CONTRIBUTING.md](CONTRIBUTING.md) documents
+> the one job that actually matters, redoing the memory offsets after a game
+> update, in the order it has to be done. Forking it or taking the repo over
+> are both fine, and neither needs anyone's permission.
+
 ![Farever Minimap](minimap.gif)
 ![Farever DPS meter](dpsmeter.gif)
 
@@ -28,8 +45,8 @@
 >
 > If the mod or the game crashes, `farever-mod.log` in your Farever folder is
 > the fastest way to narrow the cause. You can still open an issue with it
-> attached, but read [Status](#status) first: the project is between
-> maintainers, so nobody may answer.
+> attached, but see the notice above: the project has no maintainer, so
+> nobody may answer.
 
 A drop-in overlay for Farever (Shiro Games) that bundles several tools into a
 single DLL. Everything below is in one download, nothing extra to install.
@@ -78,27 +95,11 @@ more (see [Notes](#notes) at the end).
 
 ## Status
 
-> **This project is looking for a maintainer.** The person who built it has
-> run out of time for it. As of September 2026 nobody is shipping updates,
-> answering issues or reviewing pull requests.
->
-> **What that means if you play.** The mod works on the game build it was made
-> for. It will stop working the next time Farever moves things around in
-> memory, which happens on most updates. When that day comes it tells you it
-> does not recognise your client instead of showing you wrong numbers, and
-> there will be no fix unless somebody picks the project up.
->
-> **What that means if you want to fix it.** Everything is here under the MIT
-> license and it builds from a clean clone.
-> [CONTRIBUTING.md](CONTRIBUTING.md) documents the one job that actually
-> matters, redoing the memory offsets after a game update, in the order it has
-> to be done. Taking the repo over or forking it and going your own way are
-> both fine, and neither needs anyone's permission.
-
-**v1.2.8 is the last release.** It carries the full feature set in a
-single DLL with a render-mode chooser: minimap, camera compass, custom
-waypoints, party display, DPS + HPS meter, the boss speedrun timer, and the
-plugin runtime.
+**v1.2.8 is the last release.** It carries the full feature set in a single
+DLL with a render-mode chooser: minimap, camera compass, custom waypoints,
+party display, DPS + HPS meter, the boss speedrun timer, and the plugin
+runtime. No further releases are planned, see the notice at the top of this
+page.
 
 Recent changes:
 
